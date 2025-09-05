@@ -2,11 +2,7 @@ import type { APIContext } from "astro";
 export const prerender = false;
 
 import { db, FieldValue, Timestamp } from "../../lib/server/firebase-admin";
-import { WORDS } from "../../lib/words";
-
-function pickWord(): string {
-    return WORDS[Math.floor(Math.random() * WORDS.length)];
-}
+import { pickWord } from "../../lib/words";
 
 function normalizeUrl(input: string): string {
     const raw = input?.trim();
@@ -56,7 +52,7 @@ export async function POST(ctx: APIContext): Promise<Response> {
                     JSON.stringify({
                         key,
                         url: targetUrl,
-                        shortUrl: `${origin}/l/${key}`,
+                        shortUrl: `${origin}/${key}`,
                         expireAt: expireAt.toDate().toISOString(),
                     }),
                     {

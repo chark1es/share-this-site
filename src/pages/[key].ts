@@ -1,22 +1,24 @@
 import type { APIContext } from "astro";
 export const prerender = false;
 
-import { db, FieldValue } from "../../lib/server/firebase-admin";
+import { db, FieldValue } from "../lib/server/firebase-admin";
 
-export async function GET({ params, redirect }: APIContext): Promise<Response> {
+export async function GET({ params }: APIContext): Promise<Response> {
     const key = params.key as string;
     const ref = db.collection("links").doc(key);
     const snap = await ref.get();
 
     if (!snap.exists) {
-        return redirect("/expired", 302);
+        return new Response("Not Found", { status: 404 });
     }
 
     const data = snap.data() as any;
     const expired = !data?.expireAt || data.expireAt.toMillis() <= Date.now();
 
     if (expired || data?.active === false) {
-        return redirect("/expired", 302);
+        // Optional GC: remove expired/inactive link
+        ref.delete().catch(() => {});
+        return new Response("Not Found", { status: 404 });
     }
 
     // Increment visits asynchronously

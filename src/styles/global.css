@@ -16,7 +16,6 @@ body {
     font-family: "Inter", system-ui, sans-serif;
     background: var(--mantine-color-body);
     color: var(--mantine-color-text);
-    transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 /* Custom animations */

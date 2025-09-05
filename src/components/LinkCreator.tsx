@@ -185,7 +185,7 @@ export default function LinkCreator() {
                 >
                   {new URL(result.shortUrl).origin}/l/{result.key}
                 </Code>
-                <CopyButton value={`${new URL(result.shortUrl).origin}/l/${result.key}`} timeout={2000}>
+                <CopyButton value={`${new URL(result.shortUrl).origin}/${result.key}`} timeout={2000}>
                   {({ copied, copy }) => (
                     <Tooltip label={copied ? 'Copied!' : 'Copy link'} withArrow>
                       <Button
