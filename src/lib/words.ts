@@ -1,20 +1,22 @@
-import { createRequire } from "module";
+let generator: any | null = null;
 
-// Use Node ESM-compatible require to load CJS package
-const require = createRequire(import.meta.url);
-const randomWordsModule = require("random-words");
-const randomWords = randomWordsModule.generate;
+async function loadGenerator() {
+    if (generator) return generator;
+    const mod: any = await import("random-words");
+    const gen = mod.generate ?? mod.default?.generate ?? mod.default ?? mod;
+    generator = gen;
+    return generator;
+}
 
-// Generate a single, URL-safe word
-export function pickWord(): string {
+export async function pickWord(): Promise<string> {
+    const generate: any = await loadGenerator();
     for (let i = 0; i < 20; i++) {
-        const out = randomWords({ exactly: 1, maxLength: 12 });
+        const out = generate({ exactly: 1, maxLength: 12 });
         const raw = Array.isArray(out) ? out[0] : out;
         const clean = String(raw)
             .toLowerCase()
             .replace(/[^a-z0-9]/g, "");
         if (clean && clean.length >= 3 && clean.length <= 18) return clean;
     }
-    // Fallback to random base36 if library returns something unusable repeatedly
     return Math.random().toString(36).slice(2, 8);
 }

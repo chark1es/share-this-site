@@ -35,7 +35,7 @@ export async function POST(ctx: APIContext): Promise<Response> {
         let key = "";
         let attempts = 0;
         while (attempts++ < 50) {
-            key = pickWord();
+            key = await pickWord();
             const ref = db.collection("links").doc(key);
             const snap = await ref.get();
             if (!snap.exists) {
