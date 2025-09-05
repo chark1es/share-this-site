@@ -9,8 +9,10 @@
     "astro": "astro"
   },
   "dependencies": {
+    "@astrojs/node": "^9.4.3",
     "@tailwindcss/vite": "^4.1.13",
     "astro": "^5.13.5",
+    "firebase": "^12.2.1",
     "tailwindcss": "^4.1.13"
   }
 }
