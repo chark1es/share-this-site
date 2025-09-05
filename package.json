@@ -11,9 +11,35 @@
     },
     "dependencies": {
         "@astrojs/node": "^9.4.3",
+        "@mantine/carousel": "^8.2.8",
+        "@mantine/charts": "^8.2.8",
+        "@mantine/code-highlight": "^8.2.8",
+        "@mantine/core": "^8.2.8",
+        "@mantine/dates": "^8.2.8",
+        "@mantine/dropzone": "^8.2.8",
+        "@mantine/form": "^8.2.8",
+        "@mantine/hooks": "^8.2.8",
+        "@mantine/modals": "^8.2.8",
+        "@mantine/notifications": "^8.2.8",
+        "@mantine/nprogress": "^8.2.8",
+        "@mantine/spotlight": "^8.2.8",
+        "@mantine/tiptap": "^8.2.8",
         "@tailwindcss/vite": "^4.1.13",
+        "@tiptap/extension-link": "^3.4.1",
+        "@tiptap/pm": "^3.4.1",
+        "@tiptap/react": "^3.4.1",
+        "@tiptap/starter-kit": "^3.4.1",
         "astro": "^5.13.5",
+        "dayjs": "^1.11.18",
+        "embla-carousel": "^8.5.2",
+        "embla-carousel-react": "^8.5.2",
         "firebase": "^12.2.1",
+        "recharts": "^3.1.2",
         "tailwindcss": "^4.1.13"
+    },
+    "devDependencies": {
+        "postcss": "^8.5.6",
+        "postcss-preset-mantine": "^1.18.0",
+        "postcss-simple-vars": "^7.0.1"
     }
 }
