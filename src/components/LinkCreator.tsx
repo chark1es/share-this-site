@@ -74,8 +74,7 @@ export default function LinkCreator() {
     }
   }
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
+  const handleCopy = () => {
     notifications.show({
       title: 'Copied!',
       message: 'Link copied to clipboard',
@@ -183,7 +182,7 @@ export default function LinkCreator() {
                 <Code
                   className="flex-1 p-3 bg-white border border-gray-200 rounded-lg font-mono text-sm"
                 >
-                  {new URL(result.shortUrl).origin}/l/{result.key}
+                  {new URL(result.shortUrl).origin}/{result.key}
                 </Code>
                 <CopyButton value={`${new URL(result.shortUrl).origin}/${result.key}`} timeout={2000}>
                   {({ copied, copy }) => (
@@ -191,7 +190,7 @@ export default function LinkCreator() {
                       <Button
                         onClick={() => {
                           copy();
-                          handleCopy(`${new URL(result.shortUrl).origin}/l/${result.key}`);
+                          handleCopy();
                         }}
                         variant="light"
                         color={copied ? 'teal' : 'blue'}
