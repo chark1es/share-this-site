@@ -20,7 +20,13 @@ export default defineConfig({
             ],
         },
     },
+    output: "server",
     adapter: node({
         mode: "standalone",
     }),
+
+    server: {
+        host: true,
+        port: process.env.PORT ? Number(process.env.PORT) : 8080,
+    },
 });
