@@ -1,1 +1,51 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap");
 @import "tailwindcss";
+
+/* Custom styles */
+:root {
+    --mantine-color-body: #ffffff;
+    --mantine-color-text: #1a1a1a;
+}
+
+[data-mantine-color-scheme="dark"] {
+    --mantine-color-body: #0a0a0a;
+    --mantine-color-text: #ffffff;
+}
+
+body {
+    font-family: "Inter", system-ui, sans-serif;
+    background: var(--mantine-color-body);
+    color: var(--mantine-color-text);
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Custom animations */
+.animate-fade-in {
+    animation: fadeIn 0.5s ease-in-out;
+}
+
+.animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateY(10px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+/* Custom gradient backgrounds */
