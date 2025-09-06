@@ -9,24 +9,24 @@ A simple project with a simple objective. It creates temporary, single‑word li
 -   Tailwind CSS
 -   Firebase Admin (Firestore)
 
-## Project structure (simple)
+## Project structure
 
 ```
 /
 ├── public/
 ├── src/
-│   ├── components/        # React components
-│   ├── layouts/           # Astro layouts
-│   ├── lib/               # Small utilities
-│   │   ├── server/        # Server-only utilities
-│   │   └── words.ts       # Random word generator
-│   ├── pages/             # Routes
-│   │   ├── index.astro    # Home page
-│   │   ├── [key].ts       # Redirect handler
+│   ├── components/             # React components
+│   ├── layouts/                # Astro layouts
+│   ├── lib/                    # Small utilities
+│   │   ├── server/             # Server-only utilities
+│   │   └── words.ts            # Random word generator
+│   ├── pages/                  # Routes
+│   │   ├── index.astro         # Home page
+│   │   ├── [key].ts            # Redirect handler
 │   │   └── api/
-│   │       ├── links.ts   # Create Links
+│   │       ├── links.ts        # Create Links
 │   │       └── links/[key].ts  # Get Links
-│   └── styles/            # Global styles
+│   └── styles/                 # Global styles
 │       └── global.css
 ├── astro.config.mjs
 ├── package.json
@@ -47,7 +47,7 @@ bun run build
 bun run start
 ```
 
-## Environmental Variables (server)
+## Environmental Variables
 
 -   SITE_URL (e.g., https://sharethis.site)
 -   FIREBASE_PROJECT_ID
