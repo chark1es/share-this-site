@@ -42,7 +42,7 @@ export default function App() {
             </Group>
             <Group gap="md">
               <Anchor
-                href="https://github.com"
+                href="https://github.com/chark1es/sharethis"
                 target="_blank"
                 className="text-gray-600 hover:text-gray-900 transition-colors duration-200"
               >
@@ -107,7 +107,7 @@ export default function App() {
         <AppShell.Footer className="border-t border-gray-200 bg-white">
           <Group h="100%" px="lg" justify="space-between" align="center">
             <Text size="sm" c="dimmed">
-              © 2024 ShareThis.site - Temporary link shortener
+              © ${new Date().getFullYear()} ShareThis.site - Temporary link shortener
             </Text>
             <Group gap="xs" align="center">
               <Text size="sm" c="dimmed">

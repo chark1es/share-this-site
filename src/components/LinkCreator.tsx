@@ -182,9 +182,9 @@ export default function LinkCreator() {
                 <Code
                   className="flex-1 p-3 bg-white border border-gray-200 rounded-lg font-mono text-sm"
                 >
-                  {new URL(result.shortUrl).origin}/{result.key}
+                  {result.shortUrl}
                 </Code>
-                <CopyButton value={`${new URL(result.shortUrl).origin}/${result.key}`} timeout={2000}>
+                <CopyButton value={result.shortUrl} timeout={2000}>
                   {({ copied, copy }) => (
                     <Tooltip label={copied ? 'Copied!' : 'Copy link'} withArrow>
                       <Button

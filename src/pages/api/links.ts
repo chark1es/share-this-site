@@ -46,8 +46,11 @@ export async function POST(ctx: APIContext): Promise<Response> {
                     visits: 0,
                     active: true,
                 });
-                const origin =
-                    process.env.SITE_URL || new URL(ctx.request.url).origin;
+                const origin = (
+                    (import.meta as any).env?.SITE_URL ??
+                    process.env.SITE_URL ??
+                    new URL(ctx.request.url).origin
+                )?.replace(/\/$/, "");
                 return new Response(
                     JSON.stringify({
                         key,

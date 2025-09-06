@@ -1,43 +1,61 @@
-# Astro Starter Kit: Minimal
+# ShareThis.site
 
-```sh
-bun create astro@latest -- --template minimal
+A simple project with a simple structure. It creates temporary, single‑word links that expire automatically.
+
+## Tech
+
+-   Astro 5 React
+-   Mantine UI
+-   Tailwind CSS v4
+-   Firebase Admin (Firestore)
+
+## Project structure (simple)
+
 ```
-
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
-
-## 🚀 Project Structure
-
-Inside of your Astro project, you'll see the following folders and files:
-
-```text
 /
 ├── public/
 ├── src/
-│   └── pages/
-│       └── index.astro
-└── package.json
+│   ├── components/        # React UI (App, LinkCreator, etc.)
+│   ├── layouts/           # Astro layouts
+│   ├── lib/               # Small utilities
+│   │   ├── server/        # Server-only utilities
+│   │   └── words.ts       # Random word generator
+│   ├── pages/             # Routes
+│   │   ├── index.astro    # Home page
+│   │   ├── [key].ts       # Redirect handler
+│   │   └── api/
+│   │       ├── links.ts   # Create Links
+│   │       └── links/[key].ts  # Get Links
+│   └── styles/            # Global styles
+│       └── global.css
+├── astro.config.mjs
+├── package.json
+└── README.md
 ```
 
-Astro looks for `.astro` or `.md` files in the `src/pages/` directory. Each page is exposed as a route based on its file name.
+## Quick start
 
-There's nothing special about `src/components/`, but that's where we like to put any Astro/React/Vue/Svelte/Preact components.
+```
+# install dependencies
+bun i
 
-Any static assets, like images, can be placed in the `public/` directory.
+# dev
+bun run dev
 
-## 🧞 Commands
+# build + start
+bun run build
+bun run start
+```
 
-All commands are run from the root of the project, from a terminal:
+## Environmental Variables (server)
 
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `bun install`             | Installs dependencies                            |
-| `bun dev`             | Starts local dev server at `localhost:4321`      |
-| `bun build`           | Build your production site to `./dist/`          |
-| `bun preview`         | Preview your build locally, before deploying     |
-| `bun astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `bun astro -- --help` | Get help using the Astro CLI                     |
+-   SITE_URL (e.g., https://sharethis.site)
+-   FIREBASE_PROJECT_ID
+-   FIREBASE_CLIENT_EMAIL
+-   FIREBASE_PRIVATE_KEY (use real newlines or escaped \n)
 
-## 👀 Want to learn more?
+## Notes
 
-Feel free to check [our documentation](https://docs.astro.build) or jump into our [Discord server](https://astro.build/chat).
+-   Generated links are of the form: https://your-domain/{key}
+-   API response includes shortUrl you can display or copy.
+-   Minimal logic on purpose; easy to read and modify.
