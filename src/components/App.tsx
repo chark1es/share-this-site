@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   MantineProvider,
   AppShell,
@@ -11,11 +11,35 @@ import {
   Stack,
   Badge
 } from '@mantine/core';
-import { Notifications } from '@mantine/notifications';
-import { IconBrandGithub, IconHeart } from '@tabler/icons-react';
+import { Notifications, notifications } from '@mantine/notifications';
+import { IconBrandGithub, IconHeart, IconAlertCircle } from '@tabler/icons-react';
 import LinkCreator from './LinkCreator';
 
 export default function App() {
+  useEffect(() => {
+    // Check for expired link parameters in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const isExpired = urlParams.get('expired') === 'true';
+    const expiredKey = urlParams.get('key');
+
+    if (isExpired) {
+      // Show notification for expired/non-existent link
+      notifications.show({
+        title: 'Link Not Found',
+        message: expiredKey
+          ? `The link "/${expiredKey}" may have expired or doesn't exist.`
+          : 'The link you tried to access may have expired or doesn\'t exist.',
+        color: 'orange',
+        icon: <IconAlertCircle size={16} />,
+        autoClose: 8000,
+      });
+
+      // Clean up URL parameters
+      const newUrl = window.location.origin + window.location.pathname;
+      window.history.replaceState({}, document.title, newUrl);
+    }
+  }, []);
+
   return (
     <MantineProvider defaultColorScheme="light" theme={{ fontFamily: 'Inter, system-ui, sans-serif', primaryColor: 'blue' }}>
       <Notifications position="top-right" />

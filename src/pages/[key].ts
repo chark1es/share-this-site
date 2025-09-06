@@ -3,13 +3,22 @@ export const prerender = false;
 
 import { db, FieldValue } from "../lib/server/firebase-admin";
 
-export async function GET({ params }: APIContext): Promise<Response> {
+export async function GET({ params, url }: APIContext): Promise<Response> {
     const key = params.key as string;
     const ref = db.collection("links").doc(key);
     const snap = await ref.get();
 
     if (!snap.exists) {
-        return new Response("Not Found", { status: 404 });
+        // Redirect to home with expired link notification
+        const origin = url.origin;
+        return new Response(null, {
+            status: 302,
+            headers: {
+                Location: `${origin}/?expired=true&key=${encodeURIComponent(
+                    key
+                )}`,
+            },
+        });
     }
 
     const data = snap.data() as any;
@@ -18,7 +27,16 @@ export async function GET({ params }: APIContext): Promise<Response> {
     if (expired || data?.active === false) {
         // Optional GC: remove expired/inactive link
         ref.delete().catch(() => {});
-        return new Response("Not Found", { status: 404 });
+        // Redirect to home with expired link notification
+        const origin = url.origin;
+        return new Response(null, {
+            status: 302,
+            headers: {
+                Location: `${origin}/?expired=true&key=${encodeURIComponent(
+                    key
+                )}`,
+            },
+        });
     }
 
     // Increment visits asynchronously
