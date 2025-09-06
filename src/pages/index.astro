@@ -1,5 +1,6 @@
 ---
 import App from "../components/App.tsx";
+import { ColorSchemeScript } from "@mantine/core";
 
 import "../styles/global.css";
 import "@mantine/core/styles.css";
@@ -13,6 +14,19 @@ import "@mantine/notifications/styles.css";
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="generator" content={Astro.generator} />
     <meta name="color-scheme" content="light" />
+
+    <!-- Fonts: preconnect + preload + non-blocking stylesheet to avoid FOUT/CLS -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" media="print" onload="this.media='all'" />
+    <noscript>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" />
+    </noscript>
+
+    {/** Prevent color-scheme flash on first paint */}
+    <ColorSchemeScript defaultColorScheme="light" />
+
     <style>
       html, body { background:#fff; color:#1a1a1a; }
     </style>
