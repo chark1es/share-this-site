@@ -13,8 +13,7 @@ import {
   Badge,
   Divider,
   Alert,
-  Loader,
-  Box
+  Loader
 } from '@mantine/core';
 import { IconLink, IconCheck, IconCopy, IconAlertCircle } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
@@ -89,12 +88,12 @@ export default function LinkCreator() {
         <Card
           withBorder
           radius="lg"
-          p="xl"
+          p="md"
           shadow="md"
-          className="bg-white border-gray-200 hover:shadow-lg transition-shadow duration-200"
+          className="bg-white border-gray-200 hover:shadow-lg transition-shadow duration-200 sm:p-xl"
         >
           <form onSubmit={handleSubmit}>
-            <Stack gap="lg">
+            <Stack gap="md" className="sm:gap-lg">
               <TextInput
                 label="Destination URL"
                 description="Enter the URL you want to shorten. We'll add https:// if needed."
@@ -115,8 +114,8 @@ export default function LinkCreator() {
                 }}
               />
 
-              <Box>
-                <Text size="sm" fw={500} mb={8} className="text-gray-700">
+              <Stack gap="xs" align="center" className="w-full">
+                <Text size="sm" fw={500} className="text-gray-700">
                   Link expires after
                 </Text>
                 <SegmentedControl
@@ -126,20 +125,21 @@ export default function LinkCreator() {
                   size="md"
                   className="w-full max-w-md"
                 />
-              </Box>
+              </Stack>
 
-              <Group justify="flex-start">
+              <Stack align="center" className="w-full">
                 <Button
                   type="submit"
                   loading={loading}
                   disabled={disabled}
                   size="md"
                   leftSection={loading ? <Loader size={16} /> : <IconLink size={16} />}
+                  className="w-full max-w-md"
                   color="blue"
                 >
                   {loading ? 'Creating...' : 'Create Link'}
                 </Button>
-              </Group>
+              </Stack>
             </Stack>
           </form>
         </Card>
@@ -178,9 +178,35 @@ export default function LinkCreator() {
                 </Text>
               </Group>
 
-              <Group wrap="nowrap" align="center" gap="md">
+              <Stack gap="sm" className="sm:hidden">
                 <Code
-                  className="flex-1 p-3 bg-white border border-gray-200 rounded-lg font-mono text-sm"
+                  className="w-full p-2 bg-white border border-gray-200 rounded-lg font-mono text-xs break-all"
+                >
+                  {result.shortUrl}
+                </Code>
+                <CopyButton value={result.shortUrl} timeout={2000}>
+                  {({ copied, copy }) => (
+                    <Tooltip label={copied ? 'Copied!' : 'Copy link'} withArrow>
+                      <Button
+                        onClick={() => {
+                          copy();
+                          handleCopy();
+                        }}
+                        variant="light"
+                        color={copied ? 'teal' : 'blue'}
+                        leftSection={copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
+                        className="transition-all duration-200 w-full"
+                        size="sm"
+                      >
+                        {copied ? 'Copied!' : 'Copy'}
+                      </Button>
+                    </Tooltip>
+                  )}
+                </CopyButton>
+              </Stack>
+              <Group wrap="wrap" align="center" gap="md" className="hidden sm:flex">
+                <Code
+                  className="flex-1 min-w-0 p-3 bg-white border border-gray-200 rounded-lg font-mono text-sm break-all"
                 >
                   {result.shortUrl}
                 </Code>
@@ -207,15 +233,28 @@ export default function LinkCreator() {
               <Divider className="my-2" />
 
               <Stack gap="xs">
-                <Text size="sm" c="dimmed" className="flex items-center gap-2">
-                  <strong>Destination:</strong>
-                  <Code className="bg-gray-100 px-2 py-1 rounded">
+                <Stack gap="xs" className="sm:hidden">
+                  <Text size="xs" c="dimmed">
+                    <strong>Destination:</strong>
+                  </Text>
+                  <Code className="bg-gray-100 px-2 py-1 rounded text-xs break-all">
                     {result.url}
                   </Code>
-                </Text>
-                <Text size="sm" c="dimmed">
-                  <strong>Expires:</strong> {new Date(result.expireAt).toLocaleString()}
-                </Text>
+                  <Text size="xs" c="dimmed">
+                    <strong>Expires:</strong> {new Date(result.expireAt).toLocaleString()}
+                  </Text>
+                </Stack>
+                <div className="hidden sm:block">
+                  <Text size="sm" c="dimmed" className="flex items-center gap-2 flex-wrap">
+                    <strong>Destination:</strong>
+                    <Code className="bg-gray-100 px-2 py-1 rounded break-all">
+                      {result.url}
+                    </Code>
+                  </Text>
+                  <Text size="sm" c="dimmed" className="mt-1">
+                    <strong>Expires:</strong> {new Date(result.expireAt).toLocaleString()}
+                  </Text>
+                </div>
               </Stack>
             </Stack>
           </Card>
