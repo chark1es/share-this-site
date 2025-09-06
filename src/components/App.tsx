@@ -74,11 +74,11 @@ export default function App() {
         </AppShell.Header>
 
         <AppShell.Main className="flex flex-col">
-          <Container size="md" className="flex-1 px-3 sm:px-4">
-            <Box ta="center" py="lg" className="animate-fade-in sm:py-xl">
-              <Stack gap="lg" align="center">
-                <Box>
-                  <Title order={1} fw={900} className="mb-3 leading-tight text-2xl sm:text-3xl md:text-4xl lg:text-5xl px-2">
+          <Container size="md" className="flex-1 px-4 sm:px-6">
+            <Box ta="center" py="xl" className="animate-fade-in sm:py-2xl">
+              <Stack gap="xl" align="center" className="sm:gap-2xl">
+                <Stack gap="lg" align="center">
+                  <Title order={1} fw={900} className="leading-tight text-2xl sm:text-3xl md:text-4xl lg:text-5xl px-2">
                     Simple, temporary links
                   </Title>
                   <Text
@@ -86,42 +86,42 @@ export default function App() {
                     c="dimmed"
                     maw={600}
                     mx="auto"
-                    className="leading-relaxed text-sm sm:text-base md:text-lg px-4"
+                    className="leading-relaxed text-sm sm:text-base md:text-lg px-4 mt-4"
                   >
                     Create beautiful short-lived links like{' '}
-                    <code className="bg-gray-100 px-1.5 py-0.5 rounded text-blue-600 font-mono text-xs sm:text-sm">
+                    <code className="bg-gray-100 px-2 py-1 rounded text-blue-600 font-mono text-xs sm:text-sm">
                       /tell
                     </code>{' '}
                     or{' '}
-                    <code className="bg-gray-100 px-1.5 py-0.5 rounded text-purple-600 font-mono text-xs sm:text-sm">
+                    <code className="bg-gray-100 px-2 py-1 rounded text-purple-600 font-mono text-xs sm:text-sm">
                       /generate
                     </code>
                     . No account needed, just paste and share.
                   </Text>
-                </Box>
+                </Stack>
 
-                <Group gap="xs" wrap="wrap" justify="center" className="mt-2 sm:mt-4 sm:gap-md px-4">
-                  <Badge variant="light" color="green" size="md" className="sm:size-lg">
+                <Group gap="sm" wrap="wrap" justify="center" className="mt-6 sm:mt-8 sm:gap-lg px-4">
+                  <Badge variant="light" color="green" size="lg" className="px-4 py-2">
                     🔒 Secure
                   </Badge>
-                  <Badge variant="light" color="blue" size="md" className="sm:size-lg">
+                  <Badge variant="light" color="blue" size="lg" className="px-4 py-2">
                     ⚡ Fast
                   </Badge>
-                  <Badge variant="light" color="purple" size="md" className="sm:size-lg">
+                  <Badge variant="light" color="purple" size="lg" className="px-4 py-2">
                     🎯 Simple
                   </Badge>
                 </Group>
               </Stack>
             </Box>
 
-            <Box mt="lg" className="animate-slide-up sm:mt-xl">
+            <Box mt="2xl" className="animate-slide-up">
               <LinkCreator />
             </Box>
           </Container>
         </AppShell.Main>
 
         <AppShell.Footer className="border-t border-gray-200 bg-white">
-          <Stack h="100%" px="sm" align="center" justify="center" gap="xs" className="sm:hidden">
+          <Stack h="100%" px="md" align="center" justify="center" gap="sm" className="sm:hidden py-4">
             <Text size="xs" c="dimmed" ta="center">
               ©{new Date().getFullYear()} ShareThis.site - Temporary link shortener
             </Text>
@@ -135,7 +135,7 @@ export default function App() {
               </Text>
             </Group>
           </Stack>
-          <Group h="100%" px="lg" align="center" justify="between" className="hidden sm:flex">
+          <Group h="100%" px="xl" align="center" justify="between" className="hidden sm:flex">
             <Text size="sm" c="dimmed">
               ©{new Date().getFullYear()} ShareThis.site - Temporary link shortener
             </Text>
