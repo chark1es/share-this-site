@@ -7,11 +7,6 @@
     --mantine-color-text: #1a1a1a;
 }
 
-[data-mantine-color-scheme="dark"] {
-    --mantine-color-body: #0a0a0a;
-    --mantine-color-text: #ffffff;
-}
-
 body {
     font-family: "Inter", system-ui, sans-serif;
     background: var(--mantine-color-body);
@@ -48,3 +43,34 @@ body {
 }
 
 /* Custom gradient backgrounds */
+
+.gradient-text {
+    background: linear-gradient(90deg, #111827, #2563eb, #7c3aed);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+.hero-ambient {
+    position: relative;
+}
+.hero-ambient::before {
+    content: "";
+    position: absolute;
+    inset: -60px 0 auto 0;
+    height: 260px;
+    background: radial-gradient(
+        60% 60% at 50% 0%,
+        rgba(37, 99, 235, 0.1),
+        rgba(124, 58, 237, 0.06) 40%,
+        rgba(0, 0, 0, 0) 70%
+    );
+    filter: blur(12px);
+    pointer-events: none;
+}
+
+/* Focus ring tweak for better accessibility */
+:where(button, [role="button"], a, input, select, textarea):focus-visible {
+    outline: 3px solid rgba(37, 99, 235, 0.65);
+    outline-offset: 2px;
+}

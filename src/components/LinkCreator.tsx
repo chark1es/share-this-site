@@ -15,9 +15,10 @@ import {
   Alert,
   Loader,
   NumberInput,
-  Select
+  Select,
+  ActionIcon
 } from '@mantine/core';
-import { IconLink, IconCheck, IconCopy, IconAlertCircle } from '@tabler/icons-react';
+import { IconLink, IconCheck, IconCopy, IconAlertCircle, IconClipboard, IconX } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 
 function ttlOptions() {
@@ -38,6 +39,7 @@ export default function LinkCreator() {
   const [customUnit, setCustomUnit] = useState('minutes');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [inputError, setInputError] = useState<string | null>(null);
   const [result, setResult] = useState<null | { key: string; shortUrl: string; url: string; expireAt: string }>(null);
 
   const finalTtl = useMemo(() => {
@@ -48,7 +50,23 @@ export default function LinkCreator() {
     return Number(ttl);
   }, [ttl, customTime, customUnit]);
 
-  const disabled = useMemo(() => loading || !url.trim(), [loading, url]);
+  function validateUrl(raw: string): string | null {
+    const trimmed = raw.trim();
+    if (!trimmed) return 'Enter a URL';
+    const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    try {
+      const u = new URL(candidate);
+      // Require a dot and at least two letters after the last dot
+      if (!/\.[a-zA-Z]{2,}(?:[:/]|$)/.test(u.host + u.pathname)) {
+        return 'Use a valid domain (e.g. example.com)';
+      }
+      return null;
+    } catch {
+      return 'Enter a valid URL';
+    }
+  }
+
+  const disabled = useMemo(() => loading || !url.trim() || !!inputError, [loading, url, inputError]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -56,11 +74,28 @@ export default function LinkCreator() {
     setResult(null);
     setError(null);
 
+    // Basic validation
+    const earlyErr = validateUrl(url);
+    if (earlyErr) {
+      setInputError(earlyErr);
+      setLoading(false);
+      notifications.show({ title: 'Invalid URL', message: earlyErr, color: 'red', icon: <IconAlertCircle size={16} /> });
+      return;
+    }
+
+    // Normalize URL: prepend https:// if missing a scheme
+    const normalizedUrl = (() => {
+      const trimmed = url.trim();
+      if (!trimmed) return '';
+      if (/^https?:\/\//i.test(trimmed)) return trimmed;
+      return `https://${trimmed}`;
+    })();
+
     try {
       const res = await fetch('/api/links', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ url, ttlMinutes: finalTtl }),
+        body: JSON.stringify({ url: normalizedUrl, ttlMinutes: finalTtl }),
       });
       const data = await res.json();
 
@@ -113,10 +148,49 @@ export default function LinkCreator() {
                 description="Enter the URL you want to shorten. We'll add https:// if needed."
                 placeholder="https://example.com/your-long-url"
                 value={url}
-                onChange={(e) => setUrl(e.currentTarget.value)}
+                onChange={(e) => {
+                  const v = e.currentTarget.value;
+                  setUrl(v);
+                  setInputError(validateUrl(v));
+                }}
                 required
                 size="lg"
+                aria-describedby="url-help"
+                error={inputError || undefined}
                 leftSection={<IconLink size={20} />}
+                rightSectionWidth={72}
+                rightSection={
+                  <Group gap={4} wrap="nowrap">
+                    <Tooltip label="Paste from clipboard" withArrow>
+                      <ActionIcon
+                        variant="subtle"
+                        size="sm"
+                        aria-label="Paste from clipboard"
+                        onClick={async () => {
+                          try {
+                            const text = await navigator.clipboard.readText();
+                            if (text) setUrl(text);
+                          } catch { }
+                        }}
+                      >
+                        <IconClipboard size={16} />
+                      </ActionIcon>
+                    </Tooltip>
+                    {url && (
+                      <Tooltip label="Clear" withArrow>
+                        <ActionIcon
+                          variant="subtle"
+                          size="sm"
+                          color="gray"
+                          aria-label="Clear URL"
+                          onClick={() => setUrl('')}
+                        >
+                          <IconX size={16} />
+                        </ActionIcon>
+                      </Tooltip>
+                    )}
+                  </Group>
+                }
                 className="transition-all duration-200"
                 styles={{
                   input: {
@@ -126,47 +200,59 @@ export default function LinkCreator() {
                     },
                   },
                 }}
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !disabled) {
+                    (e.target as HTMLInputElement).form?.requestSubmit();
+                  }
+                }}
               />
+              <Text id="url-help" size="sm" c="dimmed" className="-mt-2">
+                Tip: Press Ctrl/⌘ + Enter to create the link
+              </Text>
 
-              <Stack gap="md" align="center" className="w-full">
-                <Text size="md" fw={500} className="text-gray-700">
-                  Link expires after
-                </Text>
-                <SegmentedControl
-                  value={ttl}
-                  onChange={(v) => setTtl(v)}
-                  data={ttlOptions()}
-                  size="lg"
-                  className="w-full max-w-md"
-                />
+              <fieldset className="w-full" aria-describedby="ttl-help">
+                <legend className="sr-only">Choose how long the link should remain active</legend>
+                <Stack gap="md" align="center">
+                  <Text id="ttl-help" size="md" fw={500} className="text-gray-700">
+                    Link expires after
+                  </Text>
+                  <SegmentedControl
+                    value={ttl}
+                    onChange={(v) => setTtl(v)}
+                    data={ttlOptions()}
+                    size="lg"
+                    className="w-full max-w-md"
+                  />
 
-                {ttl === 'custom' && (
-                  <Group gap="md" className="w-full max-w-md" align="end">
-                    <NumberInput
-                      label="Duration"
-                      placeholder="Enter time"
-                      value={customTime}
-                      onChange={(val) => setCustomTime(Number(val) || 1)}
-                      min={1}
-                      max={customUnit === 'minutes' ? 10080 : customUnit === 'hours' ? 168 : 7}
-                      size="md"
-                      className="flex-1"
-                    />
-                    <Select
-                      label="Unit"
-                      value={customUnit}
-                      onChange={(val) => setCustomUnit(val || 'minutes')}
-                      data={[
-                        { value: 'minutes', label: 'Minutes' },
-                        { value: 'hours', label: 'Hours' },
-                        { value: 'days', label: 'Days' },
-                      ]}
-                      size="md"
-                      className="w-24"
-                    />
-                  </Group>
-                )}
-              </Stack>
+                  {ttl === 'custom' && (
+                    <Group gap="md" className="w-full max-w-md" align="end">
+                      <NumberInput
+                        label="Duration"
+                        placeholder="Enter time"
+                        value={customTime}
+                        onChange={(val) => setCustomTime(Number(val) || 1)}
+                        min={1}
+                        max={customUnit === 'minutes' ? 10080 : customUnit === 'hours' ? 168 : 7}
+                        size="md"
+                        className="flex-1"
+                      />
+                      <Select
+                        label="Unit"
+                        value={customUnit}
+                        onChange={(val) => setCustomUnit(val || 'minutes')}
+                        data={[
+                          { value: 'minutes', label: 'Minutes' },
+                          { value: 'hours', label: 'Hours' },
+                          { value: 'days', label: 'Days' },
+                        ]}
+                        size="md"
+                        w={160}
+                        comboboxProps={{ width: 200, position: 'bottom-start' }}
+                      />
+                    </Group>
+                  )}
+                </Stack>
+              </fieldset>
 
               <Stack align="center" className="w-full">
                 <Button
@@ -204,6 +290,9 @@ export default function LinkCreator() {
             radius="lg"
             p="xl"
             shadow="md"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
             className="bg-white border-gray-200 animate-slide-up sm:p-2xl"
           >
             <Stack gap="xl">

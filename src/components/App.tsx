@@ -53,7 +53,7 @@ export default function App() {
           <Group h="100%" px="sm" justify="space-between" className="sm:px-lg">
             <Group gap="xs" align="center" className="min-w-0 sm:gap-md">
               <Box className="flex items-center gap-2 sm:gap-3">
-                <Title order={2} fw={800} className="gradient-text text-lg sm:text-xl md:text-2xl truncate">
+                <Title order={2} fw={800} className="text-lg sm:text-xl md:text-2xl truncate">
                   ShareThis.site
                 </Title>
               </Box>
@@ -65,6 +65,7 @@ export default function App() {
               <Anchor
                 href="https://github.com/chark1es/sharethis"
                 target="_blank"
+                aria-label="Open GitHub repository in a new tab"
                 className="text-gray-600 hover:text-gray-900 transition-colors duration-200"
               >
                 <IconBrandGithub size={18} className="sm:w-5 sm:h-5" />
@@ -75,7 +76,7 @@ export default function App() {
 
         <AppShell.Main className="flex flex-col">
           <Container size="md" className="flex-1 px-4 sm:px-6">
-            <Box ta="center" py="xl" className="animate-fade-in sm:py-2xl">
+            <Box ta="center" py="xl" className="animate-fade-in hero-ambient sm:py-2xl">
               <Stack gap="xl" align="center" className="sm:gap-2xl">
                 <Stack gap="lg" align="center">
                   <Title order={1} fw={900} className="leading-tight text-2xl sm:text-3xl md:text-4xl lg:text-5xl px-2">

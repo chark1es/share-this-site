@@ -1,6 +1,6 @@
 ---
 import App from "../components/App.tsx";
-import { ColorSchemeScript } from "@mantine/core";
+
 import "../styles/global.css";
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
@@ -12,11 +12,9 @@ import "@mantine/notifications/styles.css";
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="generator" content={Astro.generator} />
-    <meta name="color-scheme" content="light dark" />
-    <ColorSchemeScript defaultColorScheme="light" />
+    <meta name="color-scheme" content="light" />
     <style>
       html, body { background:#fff; color:#1a1a1a; }
-      [data-mantine-color-scheme="dark"] html, [data-mantine-color-scheme="dark"] body { background:#0a0a0a; color:#ffffff; }
     </style>
 
     <meta name="description" content="Create temporary, single-word links that expire automatically. No account needed - just paste, share, and go." />
