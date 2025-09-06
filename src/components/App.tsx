@@ -53,9 +53,6 @@ export default function App() {
           <Group h="100%" px="lg" justify="space-between">
             <Group gap="md" align="center">
               <Box className="flex items-center gap-3">
-                <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-                  <Text c="white" fw={800} size="sm">S</Text>
-                </div>
                 <Title order={2} fw={800} className="gradient-text">
                   ShareThis.site
                 </Title>
@@ -131,7 +128,7 @@ export default function App() {
         <AppShell.Footer className="border-t border-gray-200 bg-white">
           <Group h="100%" px="lg" justify="space-between" align="center">
             <Text size="sm" c="dimmed">
-              © ${new Date().getFullYear()} ShareThis.site - Temporary link shortener
+              ©{new Date().getFullYear()} ShareThis.site - Temporary link shortener
             </Text>
             <Group gap="xs" align="center">
               <Text size="sm" c="dimmed">
