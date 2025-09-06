@@ -1,12 +1,12 @@
 # ShareThis.site
 
-A simple project with a simple structure. It creates temporary, single‑word links that expire automatically.
+A simple project with a simple objective. It creates temporary, single‑word links that expire automatically.
 
 ## Tech
 
--   Astro 5 React
+-   Astro & React
 -   Mantine UI
--   Tailwind CSS v4
+-   Tailwind CSS
 -   Firebase Admin (Firestore)
 
 ## Project structure (simple)
@@ -15,7 +15,7 @@ A simple project with a simple structure. It creates temporary, single‑word li
 /
 ├── public/
 ├── src/
-│   ├── components/        # React UI (App, LinkCreator, etc.)
+│   ├── components/        # React components
 │   ├── layouts/           # Astro layouts
 │   ├── lib/               # Small utilities
 │   │   ├── server/        # Server-only utilities
