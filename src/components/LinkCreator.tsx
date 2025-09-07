@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Group,
@@ -11,7 +11,6 @@ import {
   CopyButton,
   Tooltip,
   Badge,
-  Divider,
   Alert,
   Loader,
   NumberInput,
@@ -40,7 +39,10 @@ export default function LinkCreator() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [inputError, setInputError] = useState<string | null>(null);
-  const [result, setResult] = useState<null | { key: string; shortUrl: string; url: string; expireAt: string }>(null);
+  const [links, setLinks] = useState<Array<{ key: string; shortUrl: string; url: string; expireAt: string }>>([]);
+  const [justAddedKey, setJustAddedKey] = useState<string | null>(null);
+
+  const itemRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const finalTtl = useMemo(() => {
     if (ttl === 'custom') {
@@ -71,7 +73,6 @@ export default function LinkCreator() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    setResult(null);
     setError(null);
 
     // Basic validation
@@ -101,7 +102,12 @@ export default function LinkCreator() {
 
       if (!res.ok) throw new Error(data?.error || 'Failed to create link');
 
-      setResult(data);
+      // Insert new link at the top of the list
+      setLinks((prev) => [data, ...prev]);
+      setJustAddedKey(data.key);
+      setUrl('');
+      setInputError(null);
+
       notifications.show({
         title: 'Success!',
         message: 'Your temporary link has been created',
@@ -122,6 +128,20 @@ export default function LinkCreator() {
     }
   }
 
+  // Persist recent links locally for a smoother UX (max 20)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('recent-links');
+      if (raw) setLinks(JSON.parse(raw));
+    } catch { }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem('recent-links', JSON.stringify(links.slice(0, 20)));
+    } catch { }
+  }, [links]);
+
   const handleCopy = () => {
     notifications.show({
       title: 'Copied!',
@@ -130,6 +150,15 @@ export default function LinkCreator() {
       icon: <IconCopy size={16} />,
     });
   };
+  // Auto-scroll to newly added link
+  useEffect(() => {
+    if (!justAddedKey) return;
+    const el = itemRefs.current[justAddedKey];
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [justAddedKey, links]);
+
 
   return (
     <div className="animate-fade-in">
@@ -143,69 +172,83 @@ export default function LinkCreator() {
         >
           <form onSubmit={handleSubmit}>
             <Stack gap="xl" className="sm:gap-2xl">
-              <TextInput
-                label="Destination URL"
-                description="Enter the URL you want to shorten. We'll add https:// if needed."
-                placeholder="https://example.com/your-long-url"
-                value={url}
-                onChange={(e) => {
-                  const v = e.currentTarget.value;
-                  setUrl(v);
-                  setInputError(validateUrl(v));
-                }}
-                required
-                size="lg"
-                aria-describedby="url-help"
-                error={inputError || undefined}
-                leftSection={<IconLink size={20} />}
-                rightSectionWidth={72}
-                rightSection={
-                  <Group gap={4} wrap="nowrap">
-                    <Tooltip label="Paste from clipboard" withArrow>
-                      <ActionIcon
-                        variant="subtle"
-                        size="sm"
-                        aria-label="Paste from clipboard"
-                        onClick={async () => {
-                          try {
-                            const text = await navigator.clipboard.readText();
-                            if (text) setUrl(text);
-                          } catch { }
-                        }}
-                      >
-                        <IconClipboard size={16} />
-                      </ActionIcon>
-                    </Tooltip>
-                    {url && (
-                      <Tooltip label="Clear" withArrow>
+              <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-end">
+                <TextInput
+                  label="Destination URL"
+                  description="Enter the URL you want to shorten. We'll add https:// if needed."
+                  placeholder="https://example.com/your-long-url"
+                  value={url}
+                  onChange={(e) => {
+                    const v = e.currentTarget.value;
+                    setUrl(v);
+                    setInputError(validateUrl(v));
+                  }}
+                  required
+                  size="lg"
+                  aria-describedby="url-help"
+                  error={inputError || undefined}
+                  leftSection={<IconLink size={20} />}
+                  rightSectionWidth={72}
+                  rightSection={
+                    <Group gap={4} wrap="nowrap">
+                      <Tooltip label="Paste from clipboard" withArrow>
                         <ActionIcon
                           variant="subtle"
                           size="sm"
-                          color="gray"
-                          aria-label="Clear URL"
-                          onClick={() => setUrl('')}
+                          aria-label="Paste from clipboard"
+                          onClick={async () => {
+                            try {
+                              const text = await navigator.clipboard.readText();
+                              if (text) setUrl(text);
+                            } catch { }
+                          }}
                         >
-                          <IconX size={16} />
+                          <IconClipboard size={16} />
                         </ActionIcon>
                       </Tooltip>
-                    )}
-                  </Group>
-                }
-                className="transition-all duration-200"
-                styles={{
-                  input: {
-                    '&:focus': {
-                      borderColor: 'var(--mantine-color-blue-6)',
-                      boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.1)',
-                    },
-                  },
-                }}
-                onKeyDown={(e) => {
-                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !disabled) {
-                    (e.target as HTMLInputElement).form?.requestSubmit();
+                      {url && (
+                        <Tooltip label="Clear" withArrow>
+                          <ActionIcon
+                            variant="subtle"
+                            size="sm"
+                            color="gray"
+                            aria-label="Clear URL"
+                            onClick={() => setUrl('')}
+                          >
+                            <IconX size={16} />
+                          </ActionIcon>
+                        </Tooltip>
+                      )}
+                    </Group>
                   }
-                }}
-              />
+                  className="transition-all duration-200"
+                  styles={{
+                    input: {
+                      '&:focus': {
+                        borderColor: 'var(--mantine-color-blue-6)',
+                        boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.1)',
+                      },
+                    },
+                  }}
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !disabled) {
+                      (e.target as HTMLInputElement).form?.requestSubmit();
+                    }
+                  }}
+                />
+
+                <Button
+                  type="submit"
+                  loading={loading}
+                  disabled={disabled}
+                  size="lg"
+                  leftSection={loading ? <Loader size={18} /> : <IconLink size={18} />}
+                  className="w-full sm:w-auto sm:min-w-[160px]"
+                  color="blue"
+                >
+                  {loading ? 'Creating...' : 'Create Link'}
+                </Button>
+              </div>
               <Text id="url-help" size="sm" c="dimmed" className="-mt-2">
                 Tip: Press Ctrl/⌘ + Enter to create the link
               </Text>
@@ -254,19 +297,7 @@ export default function LinkCreator() {
                 </Stack>
               </fieldset>
 
-              <Stack align="center" className="w-full">
-                <Button
-                  type="submit"
-                  loading={loading}
-                  disabled={disabled}
-                  size="lg"
-                  leftSection={loading ? <Loader size={18} /> : <IconLink size={18} />}
-                  className="w-full max-w-md"
-                  color="blue"
-                >
-                  {loading ? 'Creating...' : 'Create Link'}
-                </Button>
-              </Stack>
+
             </Stack>
           </form>
         </Card>
@@ -284,111 +315,75 @@ export default function LinkCreator() {
           </Alert>
         )}
 
-        {result && (
+        {links.length > 0 && (
           <Card
             withBorder
             radius="lg"
             p="xl"
             shadow="md"
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
             className="bg-white border-gray-200 animate-slide-up sm:p-2xl"
+            aria-live="polite"
           >
-            <Stack gap="xl">
-              <Group gap="md" align="center" className="justify-center sm:justify-start">
-                <Badge
-                  color="teal"
-                  variant="light"
-                  size="xl"
-                  leftSection={<IconCheck size={16} />}
-                  className="px-4 py-2"
-                >
-                  Success
-                </Badge>
-                <Text c="dimmed" size="md" className="font-medium">
-                  Your temporary link is ready!
-                </Text>
+            <Stack gap="lg">
+              <Group justify="space-between" align="center">
+                <Text fw={600} size="lg">Your links</Text>
+                <Badge variant="light" color="gray">{links.length}</Badge>
               </Group>
 
-              <Stack gap="lg" className="sm:hidden">
-                <Code
-                  className="w-full p-4 bg-gray-50 border border-gray-200 rounded-lg font-mono text-sm break-all"
-                >
-                  {result.shortUrl}
-                </Code>
-                <CopyButton value={result.shortUrl} timeout={2000}>
-                  {({ copied, copy }) => (
-                    <Tooltip label={copied ? 'Copied!' : 'Copy link'} withArrow>
-                      <Button
-                        onClick={() => {
-                          copy();
-                          handleCopy();
-                        }}
-                        variant="light"
-                        color={copied ? 'teal' : 'blue'}
-                        leftSection={copied ? <IconCheck size={18} /> : <IconCopy size={18} />}
-                        className="transition-all duration-200 w-full"
-                        size="md"
-                      >
-                        {copied ? 'Copied!' : 'Copy'}
-                      </Button>
-                    </Tooltip>
-                  )}
-                </CopyButton>
-              </Stack>
-              <Group wrap="wrap" align="center" gap="lg" className="hidden sm:flex">
-                <Code
-                  className="flex-1 min-w-0 p-4 bg-gray-50 border border-gray-200 rounded-lg font-mono text-base break-all"
-                >
-                  {result.shortUrl}
-                </Code>
-                <CopyButton value={result.shortUrl} timeout={2000}>
-                  {({ copied, copy }) => (
-                    <Tooltip label={copied ? 'Copied!' : 'Copy link'} withArrow>
-                      <Button
-                        onClick={() => {
-                          copy();
-                          handleCopy();
-                        }}
-                        variant="light"
-                        color={copied ? 'teal' : 'blue'}
-                        leftSection={copied ? <IconCheck size={18} /> : <IconCopy size={18} />}
-                        className="transition-all duration-200"
-                        size="lg"
-                      >
-                        {copied ? 'Copied!' : 'Copy'}
-                      </Button>
-                    </Tooltip>
-                  )}
-                </CopyButton>
-              </Group>
-
-              <Divider className="my-6" />
-
-              <Stack gap="lg">
-                <Stack gap="md" className="sm:hidden">
-                  <Text size="sm" c="dimmed" fw={500}>
-                    <strong>Destination:</strong>
-                  </Text>
-                  <Code className="bg-gray-100 px-3 py-2 rounded-lg text-sm break-all">
-                    {result.url}
-                  </Code>
-                  <Text size="sm" c="dimmed" fw={500}>
-                    <strong>Expires:</strong> {new Date(result.expireAt).toLocaleString()}
-                  </Text>
-                </Stack>
-                <div className="hidden sm:block space-y-4">
-                  <Text size="md" c="dimmed" className="flex items-center gap-3 flex-wrap">
-                    <strong>Destination:</strong>
-                    <Code className="bg-gray-100 px-3 py-2 rounded-lg break-all">
-                      {result.url}
-                    </Code>
-                  </Text>
-                  <Text size="md" c="dimmed" fw={500}>
-                    <strong>Expires:</strong> {new Date(result.expireAt).toLocaleString()}
-                  </Text>
-                </div>
+              <Stack gap="sm">
+                {links.map((l) => (
+                  <div
+                    key={l.key}
+                    ref={(el) => {
+                      if (el) itemRefs.current[l.key] = el;
+                    }}
+                    className="p-4 border border-gray-200 rounded-lg bg-gray-50 hover:bg-gray-50/70 transition-colors"
+                  >
+                    <Group justify="space-between" wrap="nowrap" align="center">
+                      <Group gap="sm" wrap="nowrap" className="min-w-0">
+                        {justAddedKey === l.key && (
+                          <Badge color="teal" variant="light" size="sm">New</Badge>
+                        )}
+                        <Code className="px-3 py-2 rounded-lg break-all text-sm bg-white border">{l.shortUrl}</Code>
+                      </Group>
+                      <Group gap="xs" wrap="nowrap">
+                        <CopyButton value={l.shortUrl} timeout={2000}>
+                          {({ copied, copy }) => (
+                            <Tooltip label={copied ? 'Copied!' : 'Copy'} withArrow>
+                              <ActionIcon
+                                variant="subtle"
+                                color={copied ? 'teal' : 'blue'}
+                                aria-label="Copy short link"
+                                onClick={() => { copy(); handleCopy(); }}
+                              >
+                                {copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
+                              </ActionIcon>
+                            </Tooltip>
+                          )}
+                        </CopyButton>
+                        <Tooltip label="Remove" withArrow>
+                          <ActionIcon
+                            variant="subtle"
+                            color="red"
+                            aria-label="Remove from list"
+                            onClick={() => setLinks((prev) => prev.filter((x) => x.key !== l.key))}
+                          >
+                            <IconX size={16} />
+                          </ActionIcon>
+                        </Tooltip>
+                      </Group>
+                    </Group>
+                    <div className="mt-2 text-sm text-gray-600 space-y-1">
+                      <div className="truncate">
+                        <strong>Destination:</strong>{' '}
+                        <span className="break-all">{l.url}</span>
+                      </div>
+                      <div>
+                        <strong>Expires:</strong> {new Date(l.expireAt).toLocaleString()}
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </Stack>
             </Stack>
           </Card>
