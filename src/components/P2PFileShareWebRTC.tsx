@@ -30,14 +30,37 @@ const dlog = (...args: any[]) => {
   if (DEBUG_P2P) console.log('[P2P]', ...args);
 };
 
-// WebRTC ICE configuration - ONLY Google STUN, no TURN
+// WebRTC ICE configuration helper (STUN-only by default, optional TURN via env)
+const buildIceServers = (): RTCIceServer[] => {
+  const iceServers: RTCIceServer[] = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+  ];
+
+  const turnUrl = import.meta.env.PUBLIC_TURN_URL as string | undefined;
+  if (turnUrl) {
+    iceServers.push({
+      urls: turnUrl,
+      username: (import.meta.env.PUBLIC_TURN_USERNAME as string) || undefined,
+      credential: (import.meta.env.PUBLIC_TURN_CREDENTIAL as string) || undefined,
+    });
+  }
+
+  return iceServers;
+};
+
 const rtcConfig: RTCConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' }
-  ],
-  iceCandidatePoolSize: 10,
+  iceServers: buildIceServers(),
+  iceCandidatePoolSize: 0, // Don't pre-gather, let candidates generate naturally
   bundlePolicy: 'max-bundle',
   rtcpMuxPolicy: 'require',
+  iceTransportPolicy: 'all', // Allow all types of candidates
+  ...(import.meta.env.PUBLIC_WEBRTC_FORCE_RELAY
+    ? { iceTransportPolicy: 'relay' as RTCIceTransportPolicy }
+    : {}),
 };
 
 type Mode = 'idle' | 'sending' | 'receiving';
@@ -94,6 +117,7 @@ export default function P2PFileShareWebRTC() {
   const peerIdRef = useRef('');
   const roomCodeRef = useRef('');
   const roleRef = useRef<'sender' | 'receiver'>('sender');
+  const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
 
   // Generate unique peer ID
   useEffect(() => {
@@ -132,6 +156,7 @@ export default function P2PFileShareWebRTC() {
     chunksRef.current = [];
     receivedSizeRef.current = 0;
     sendingRef.current = false;
+    pendingIceCandidatesRef.current = [];
 
     dlog('cleanup: complete');
   };
@@ -157,44 +182,51 @@ export default function P2PFileShareWebRTC() {
       };
 
       ws.onmessage = async (event) => {
-        const message: SignalingMessage = JSON.parse(event.data);
-        dlog('WebSocket message:', message.type);
+        try {
+          const message: SignalingMessage = JSON.parse(event.data);
+          dlog('WebSocket message:', message.type);
 
-        switch (message.type) {
-          case 'joined':
-            dlog('Successfully joined room');
-            resolve(ws);
-            break;
-          case 'peer-joined':
-            dlog('Peer joined:', message.role);
-            if (role === 'sender' && message.role === 'receiver') {
-              // Sender creates offer when receiver joins
-              await createOffer();
-            }
-            break;
-          case 'offer':
-            if (role === 'receiver' && message.sdp) {
-              await handleOffer(message.sdp);
-            }
-            break;
-          case 'answer':
-            if (role === 'sender' && message.sdp) {
-              await handleAnswer(message.sdp);
-            }
-            break;
-          case 'ice-candidate':
-            if (message.candidate) {
-              await handleIceCandidate(message.candidate);
-            }
-            break;
-          case 'peer-left':
-            setError('Peer disconnected');
-            cleanup();
-            break;
-          case 'error':
-            setError(message.error || 'Unknown error');
-            reject(new Error(message.error));
-            break;
+          switch (message.type) {
+            case 'joined':
+              dlog('Successfully joined room');
+              // Create peer connection immediately after joining
+              createPeerConnection(role);
+              resolve(ws);
+              break;
+            case 'peer-joined':
+              dlog('Peer joined:', message.role);
+              if (role === 'sender' && message.role === 'receiver') {
+                // Sender creates offer when receiver joins
+                await createOffer();
+              }
+              break;
+            case 'offer':
+              if (role === 'receiver' && message.sdp) {
+                await handleOffer(message.sdp);
+              }
+              break;
+            case 'answer':
+              if (role === 'sender' && message.sdp) {
+                await handleAnswer(message.sdp);
+              }
+              break;
+            case 'ice-candidate':
+              if (message.candidate) {
+                await handleIceCandidate(message.candidate);
+              }
+              break;
+            case 'peer-left':
+              setError('Peer disconnected');
+              cleanup();
+              break;
+            case 'error':
+              setError(message.error || 'Unknown error');
+              reject(new Error(message.error));
+              break;
+          }
+        } catch (err) {
+          console.error('[P2P] Error handling WebSocket message:', err);
+          setError('Failed to process signaling message');
         }
       };
 
@@ -210,21 +242,54 @@ export default function P2PFileShareWebRTC() {
     });
   };
 
+  const flushPendingIceCandidates = async () => {
+    const pc = peerConnectionRef.current;
+    if (!pc || !pc.remoteDescription) {
+      return;
+    }
+
+    if (pendingIceCandidatesRef.current.length === 0) {
+      return;
+    }
+
+    const queuedCandidates = pendingIceCandidatesRef.current.splice(0);
+    dlog('Flushing queued ICE candidates:', queuedCandidates.length);
+
+    for (const candidate of queuedCandidates) {
+      try {
+        await pc.addIceCandidate(candidate);
+      } catch (error) {
+        console.error('Failed to add queued ICE candidate:', error);
+      }
+    }
+  };
+
   const createPeerConnection = (role: 'sender' | 'receiver') => {
     dlog('Creating peer connection as', role);
     const pc = new RTCPeerConnection(rtcConfig);
     peerConnectionRef.current = pc;
+    pendingIceCandidatesRef.current = [];
 
     pc.onicecandidate = (event) => {
-      if (event.candidate && wsRef.current) {
-        dlog('Sending ICE candidate');
-        wsRef.current.send(JSON.stringify({
-          type: 'ice-candidate',
-          roomCode: roomCodeRef.current,
-          role: roleRef.current,
-          candidate: event.candidate.toJSON()
-        }));
+      if (event.candidate) {
+        dlog('ICE candidate generated:', event.candidate.candidate);
+        dlog('Candidate type:', event.candidate.type, 'Protocol:', event.candidate.protocol);
+        if (wsRef.current) {
+          dlog('Sending ICE candidate via WebSocket');
+          wsRef.current.send(JSON.stringify({
+            type: 'ice-candidate',
+            roomCode: roomCodeRef.current,
+            role: roleRef.current,
+            candidate: event.candidate.toJSON()
+          }));
+        }
+      } else {
+        dlog('ICE gathering complete (null candidate)');
       }
+    };
+
+    pc.onicegatheringstatechange = () => {
+      dlog('ICE gathering state:', pc.iceGatheringState);
     };
 
     pc.onconnectionstatechange = () => {
@@ -243,6 +308,11 @@ export default function P2PFileShareWebRTC() {
     pc.oniceconnectionstatechange = () => {
       dlog('ICE connection state:', pc.iceConnectionState);
     };
+
+    pc.addEventListener('icecandidateerror', (event) => {
+      const iceError = event as RTCPeerConnectionIceErrorEvent;
+      console.error('ICE candidate error:', iceError?.errorText, iceError?.errorCode, iceError?.url);
+    });
 
     if (role === 'receiver') {
       pc.ondatachannel = (event) => {
@@ -296,8 +366,13 @@ export default function P2PFileShareWebRTC() {
     });
     setupDataChannel(channel);
 
+    dlog('Generating offer...');
     const offer = await pc.createOffer();
+    dlog('Offer SDP:', offer.sdp?.substring(0, 200) + '...');
+    dlog('Setting local description...');
     await pc.setLocalDescription(offer);
+    dlog('Local description set, ICE gathering state:', pc.iceGatheringState);
+    dlog('Local description SDP:', pc.localDescription?.sdp?.substring(0, 200) + '...');
 
     dlog('Sending offer');
     wsRef.current.send(JSON.stringify({
@@ -316,6 +391,7 @@ export default function P2PFileShareWebRTC() {
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
+    await flushPendingIceCandidates();
 
     dlog('Sending answer');
     wsRef.current.send(JSON.stringify({
@@ -329,14 +405,30 @@ export default function P2PFileShareWebRTC() {
     if (!peerConnectionRef.current) return;
 
     dlog('Handling answer');
-    await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(sdp));
+    const pc = peerConnectionRef.current;
+    await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    dlog('Remote description set, ICE gathering state:', pc.iceGatheringState);
+    dlog('Connection state:', pc.connectionState);
+    dlog('ICE connection state:', pc.iceConnectionState);
+    await flushPendingIceCandidates();
   };
 
   const handleIceCandidate = async (candidate: RTCIceCandidateInit) => {
-    if (!peerConnectionRef.current) return;
+    const pc = peerConnectionRef.current;
+    if (!pc) return;
 
-    dlog('Adding ICE candidate');
-    await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+    if (!pc.remoteDescription) {
+      dlog('Queueing ICE candidate until remote description is set');
+      pendingIceCandidatesRef.current.push(candidate);
+      return;
+    }
+
+    try {
+      await pc.addIceCandidate(candidate);
+      dlog('Added ICE candidate');
+    } catch (error) {
+      console.error('Failed to add ICE candidate:', error);
+    }
   };
 
   const updateTransferSpeed = (bytesTransferred: number) => {
@@ -533,8 +625,7 @@ export default function P2PFileShareWebRTC() {
       setMode('sending');
       setStatus('Waiting for receiver...');
 
-      // Connect to WebSocket and create peer connection
-      createPeerConnection('sender');
+      // Connect to WebSocket (peer connection created inside on 'joined')
       await connectWebSocket(sessionCode, 'sender');
 
     } catch (err: any) {
@@ -568,8 +659,7 @@ export default function P2PFileShareWebRTC() {
       setMode('receiving');
       setStatus('Establishing connection...');
 
-      // Connect to WebSocket and create peer connection
-      createPeerConnection('receiver');
+      // Connect to WebSocket (peer connection created inside on 'joined')
       await connectWebSocket(codeToUse, 'receiver');
 
     } catch (err: any) {
@@ -771,4 +861,3 @@ export default function P2PFileShareWebRTC() {
     </Card>
   );
 }
-
