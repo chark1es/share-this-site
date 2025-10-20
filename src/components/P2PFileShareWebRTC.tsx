@@ -54,10 +54,8 @@ const buildIceServers = (): RTCIceServer[] => {
 
 const rtcConfig: RTCConfiguration = {
   iceServers: buildIceServers(),
-  iceCandidatePoolSize: 0, // Don't pre-gather, let candidates generate naturally
   bundlePolicy: 'max-bundle',
   rtcpMuxPolicy: 'require',
-  iceTransportPolicy: 'all', // Allow all types of candidates
   ...(import.meta.env.PUBLIC_WEBRTC_FORCE_RELAY
     ? { iceTransportPolicy: 'relay' as RTCIceTransportPolicy }
     : {}),
@@ -257,9 +255,11 @@ export default function P2PFileShareWebRTC() {
 
     for (const candidate of queuedCandidates) {
       try {
-        await pc.addIceCandidate(candidate);
+        dlog('Adding queued ICE candidate:', candidate.candidate?.substring(0, 50) + '...');
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        dlog('Successfully added queued ICE candidate');
       } catch (error) {
-        console.error('Failed to add queued ICE candidate:', error);
+        console.error('Failed to add queued ICE candidate:', error, candidate);
       }
     }
   };
@@ -307,6 +307,13 @@ export default function P2PFileShareWebRTC() {
 
     pc.oniceconnectionstatechange = () => {
       dlog('ICE connection state:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'failed') {
+        console.error('ICE connection failed');
+        setError('Connection failed. Please try again.');
+        cleanup();
+      } else if (pc.iceConnectionState === 'disconnected') {
+        console.warn('ICE connection disconnected');
+      }
     };
 
     pc.addEventListener('icecandidateerror', (event) => {
@@ -368,17 +375,36 @@ export default function P2PFileShareWebRTC() {
 
     dlog('Generating offer...');
     const offer = await pc.createOffer();
-    dlog('Offer SDP:', offer.sdp?.substring(0, 200) + '...');
     dlog('Setting local description...');
     await pc.setLocalDescription(offer);
     dlog('Local description set, ICE gathering state:', pc.iceGatheringState);
-    dlog('Local description SDP:', pc.localDescription?.sdp?.substring(0, 200) + '...');
 
-    dlog('Sending offer');
+    // Wait for ICE gathering to complete to ensure we have candidates in the SDP
+    if (pc.iceGatheringState !== 'complete') {
+      dlog('Waiting for ICE gathering to complete...');
+      await new Promise<void>((resolve) => {
+        const checkGathering = () => {
+          if (pc.iceGatheringState === 'complete') {
+            dlog('ICE gathering completed, sending offer');
+            pc.removeEventListener('icegatheringstatechange', checkGathering);
+            resolve();
+          }
+        };
+        pc.addEventListener('icegatheringstatechange', checkGathering);
+        // Timeout after 3 seconds
+        setTimeout(() => {
+          dlog('ICE gathering timeout, sending offer anyway');
+          pc.removeEventListener('icegatheringstatechange', checkGathering);
+          resolve();
+        }, 3000);
+      });
+    }
+
+    dlog('Sending offer with SDP');
     wsRef.current.send(JSON.stringify({
       type: 'offer',
       roomCode: roomCodeRef.current,
-      sdp: offer
+      sdp: pc.localDescription // Use localDescription which includes gathered candidates
     }));
   };
 
@@ -388,16 +414,41 @@ export default function P2PFileShareWebRTC() {
     dlog('Handling offer');
     const pc = peerConnectionRef.current;
 
+    dlog('Setting remote description (offer)');
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    dlog('Creating answer...');
     const answer = await pc.createAnswer();
+    dlog('Setting local description (answer)');
     await pc.setLocalDescription(answer);
+    dlog('Answer set, ICE gathering state:', pc.iceGatheringState);
     await flushPendingIceCandidates();
 
-    dlog('Sending answer');
+    // Wait for ICE gathering to complete to ensure we have candidates in the SDP
+    if (pc.iceGatheringState !== 'complete') {
+      dlog('Waiting for ICE gathering to complete...');
+      await new Promise<void>((resolve) => {
+        const checkGathering = () => {
+          if (pc.iceGatheringState === 'complete') {
+            dlog('ICE gathering completed, sending answer');
+            pc.removeEventListener('icegatheringstatechange', checkGathering);
+            resolve();
+          }
+        };
+        pc.addEventListener('icegatheringstatechange', checkGathering);
+        // Timeout after 3 seconds
+        setTimeout(() => {
+          dlog('ICE gathering timeout, sending answer anyway');
+          pc.removeEventListener('icegatheringstatechange', checkGathering);
+          resolve();
+        }, 3000);
+      });
+    }
+
+    dlog('Sending answer with SDP');
     wsRef.current.send(JSON.stringify({
       type: 'answer',
       roomCode: roomCodeRef.current,
-      sdp: answer
+      sdp: pc.localDescription // Use localDescription which includes gathered candidates
     }));
   };
 
@@ -415,7 +466,10 @@ export default function P2PFileShareWebRTC() {
 
   const handleIceCandidate = async (candidate: RTCIceCandidateInit) => {
     const pc = peerConnectionRef.current;
-    if (!pc) return;
+    if (!pc) {
+      dlog('Cannot add ICE candidate: no peer connection');
+      return;
+    }
 
     if (!pc.remoteDescription) {
       dlog('Queueing ICE candidate until remote description is set');
@@ -424,10 +478,11 @@ export default function P2PFileShareWebRTC() {
     }
 
     try {
-      await pc.addIceCandidate(candidate);
-      dlog('Added ICE candidate');
+      dlog('Adding ICE candidate:', candidate.candidate?.substring(0, 50) + '...');
+      await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      dlog('Successfully added ICE candidate');
     } catch (error) {
-      console.error('Failed to add ICE candidate:', error);
+      console.error('Failed to add ICE candidate:', error, candidate);
     }
   };
 
