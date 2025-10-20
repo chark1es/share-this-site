@@ -2,6 +2,7 @@
 import { defineConfig } from "astro/config";
 
 import tailwindcss from "@tailwindcss/vite";
+import { nodePolyfills } from "vite-plugin-node-polyfills";
 
 import node from "@astrojs/node";
 import react from "@astrojs/react";
@@ -10,7 +11,19 @@ import react from "@astrojs/react";
 export default defineConfig({
     integrations: [react()],
     vite: {
-        plugins: [tailwindcss()],
+        plugins: [
+            tailwindcss(),
+            nodePolyfills({
+                // Whether to polyfill specific globals.
+                globals: {
+                    Buffer: true,
+                    global: true,
+                    process: true,
+                },
+                // Whether to polyfill `node:` protocol imports.
+                protocolImports: true,
+            }),
+        ],
         optimizeDeps: {
             include: [
                 "@mantine/core",

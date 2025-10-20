@@ -13,7 +13,7 @@ import {
 } from '@mantine/core';
 import { Notifications, notifications } from '@mantine/notifications';
 import { IconBrandGithub, IconHeart, IconAlertCircle } from '@tabler/icons-react';
-import LinkCreator from './LinkCreator';
+import TabsContainer from './TabsContainer';
 
 export default function App() {
   useEffect(() => {
@@ -80,7 +80,7 @@ export default function App() {
               <Stack gap="xl" align="center" className="sm:gap-2xl">
                 <Stack gap="lg" align="center">
                   <Title order={1} fw={900} className="leading-tight text-2xl sm:text-3xl md:text-4xl lg:text-5xl px-2">
-                    Simple, temporary links
+                    Share Anything, Instantly
                   </Title>
                   <Text
                     size="lg"
@@ -89,15 +89,8 @@ export default function App() {
                     mx="auto"
                     className="leading-relaxed text-sm sm:text-base md:text-lg px-4 mt-4"
                   >
-                    Create beautiful short-lived links like{' '}
-                    <code className="bg-gray-100 px-2 py-1 rounded text-blue-600 font-mono text-xs sm:text-sm">
-                      /tell
-                    </code>{' '}
-                    or{' '}
-                    <code className="bg-gray-100 px-2 py-1 rounded text-purple-600 font-mono text-xs sm:text-sm">
-                      /generate
-                    </code>
-                    . No account needed, just paste and share.
+                    Create temporary links, share files peer-to-peer, or paste code snippets.
+                    No account needed, just share.
                   </Text>
                 </Stack>
 
@@ -116,7 +109,7 @@ export default function App() {
             </Box>
 
             <Box mt="2xl" className="animate-slide-up">
-              <LinkCreator />
+              <TabsContainer />
             </Box>
           </Container>
         </AppShell.Main>
