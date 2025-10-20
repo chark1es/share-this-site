@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Tabs, Container, Box } from '@mantine/core';
 import { IconLink, IconFileUpload, IconCode } from '@tabler/icons-react';
 import LinkCreator from './LinkCreator';
-import P2PFileShare from './P2PFileShare';
+import P2PFileShareWebRTC from './P2PFileShareWebRTC';
 import SnippetShare from './SnippetShare';
 
 export default function TabsContainer() {
@@ -10,33 +10,33 @@ export default function TabsContainer() {
 
   return (
     <Container size="lg" className="w-full">
-      <Tabs 
-        value={activeTab} 
+      <Tabs
+        value={activeTab}
         onChange={setActiveTab}
         variant="pills"
         radius="lg"
         className="w-full"
       >
-        <Tabs.List 
-          grow 
+        <Tabs.List
+          grow
           className="mb-6 bg-gray-50 p-2 rounded-xl border border-gray-200"
         >
-          <Tabs.Tab 
-            value="links" 
+          <Tabs.Tab
+            value="links"
             leftSection={<IconLink size={18} />}
             className="font-medium transition-all duration-200 data-[active]:bg-white data-[active]:shadow-sm"
           >
             URL Shortener
           </Tabs.Tab>
-          <Tabs.Tab 
-            value="files" 
+          <Tabs.Tab
+            value="files"
             leftSection={<IconFileUpload size={18} />}
             className="font-medium transition-all duration-200 data-[active]:bg-white data-[active]:shadow-sm"
           >
             P2P File Share
           </Tabs.Tab>
-          <Tabs.Tab 
-            value="snippets" 
+          <Tabs.Tab
+            value="snippets"
             leftSection={<IconCode size={18} />}
             className="font-medium transition-all duration-200 data-[active]:bg-white data-[active]:shadow-sm"
           >
@@ -52,7 +52,7 @@ export default function TabsContainer() {
 
         <Tabs.Panel value="files">
           <Box className="animate-fade-in">
-            <P2PFileShare />
+            <P2PFileShareWebRTC />
           </Box>
         </Tabs.Panel>
 

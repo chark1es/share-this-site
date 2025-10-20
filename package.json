@@ -4,8 +4,8 @@
     "version": "0.0.1",
     "scripts": {
         "dev": "astro dev",
-        "build": "astro build",
-        "start": "node ./dist/server/entry.mjs",
+        "build": "astro build && bun build src/server.ts --outdir dist --target node",
+        "start": "node ./dist/server.js",
         "preview": "astro preview",
         "astro": "astro"
     },
@@ -31,10 +31,13 @@
         "@tiptap/pm": "^3.4.1",
         "@tiptap/react": "^3.4.1",
         "@tiptap/starter-kit": "^3.4.1",
+        "@types/express": "^5.0.3",
+        "@types/ws": "^8.18.1",
         "astro": "^5.13.5",
         "dayjs": "^1.11.18",
         "embla-carousel": "^8.5.2",
         "embla-carousel-react": "^8.5.2",
+        "express": "^5.1.0",
         "firebase": "^12.2.1",
         "firebase-admin": "^13.5.0",
         "peerjs": "^1.5.4",
@@ -43,7 +46,8 @@
         "react": "^19.1.1",
         "react-dom": "^19.1.1",
         "recharts": "^3.1.2",
-        "tailwindcss": "^4.1.13"
+        "tailwindcss": "^4.1.13",
+        "ws": "^8.18.3"
     },
     "devDependencies": {
         "postcss": "^8.5.6",
