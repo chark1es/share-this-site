@@ -272,16 +272,21 @@ export default function P2PFileShareWebRTC() {
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        dlog('ICE candidate generated:', event.candidate.candidate);
-        dlog('Candidate type:', event.candidate.type, 'Protocol:', event.candidate.protocol);
-        if (wsRef.current) {
+        const cand = event.candidate;
+        dlog('ICE candidate generated:', cand.candidate);
+        dlog('  Type:', cand.type, '| Protocol:', cand.protocol, '| Address:', cand.address);
+
+        // Send candidate via WebSocket
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           dlog('Sending ICE candidate via WebSocket');
           wsRef.current.send(JSON.stringify({
             type: 'ice-candidate',
             roomCode: roomCodeRef.current,
             role: roleRef.current,
-            candidate: event.candidate.toJSON()
+            candidate: cand.toJSON()
           }));
+        } else {
+          console.warn('WebSocket not ready, cannot send ICE candidate');
         }
       } else {
         dlog('ICE gathering complete (null candidate)');
@@ -379,32 +384,12 @@ export default function P2PFileShareWebRTC() {
     await pc.setLocalDescription(offer);
     dlog('Local description set, ICE gathering state:', pc.iceGatheringState);
 
-    // Wait for ICE gathering to complete to ensure we have candidates in the SDP
-    if (pc.iceGatheringState !== 'complete') {
-      dlog('Waiting for ICE gathering to complete...');
-      await new Promise<void>((resolve) => {
-        const checkGathering = () => {
-          if (pc.iceGatheringState === 'complete') {
-            dlog('ICE gathering completed, sending offer');
-            pc.removeEventListener('icegatheringstatechange', checkGathering);
-            resolve();
-          }
-        };
-        pc.addEventListener('icegatheringstatechange', checkGathering);
-        // Timeout after 3 seconds
-        setTimeout(() => {
-          dlog('ICE gathering timeout, sending offer anyway');
-          pc.removeEventListener('icegatheringstatechange', checkGathering);
-          resolve();
-        }, 3000);
-      });
-    }
-
-    dlog('Sending offer with SDP');
+    // Send offer immediately - candidates will be sent via trickle ICE
+    dlog('Sending offer (trickle ICE - candidates sent separately)');
     wsRef.current.send(JSON.stringify({
       type: 'offer',
       roomCode: roomCodeRef.current,
-      sdp: pc.localDescription // Use localDescription which includes gathered candidates
+      sdp: offer
     }));
   };
 
@@ -423,32 +408,12 @@ export default function P2PFileShareWebRTC() {
     dlog('Answer set, ICE gathering state:', pc.iceGatheringState);
     await flushPendingIceCandidates();
 
-    // Wait for ICE gathering to complete to ensure we have candidates in the SDP
-    if (pc.iceGatheringState !== 'complete') {
-      dlog('Waiting for ICE gathering to complete...');
-      await new Promise<void>((resolve) => {
-        const checkGathering = () => {
-          if (pc.iceGatheringState === 'complete') {
-            dlog('ICE gathering completed, sending answer');
-            pc.removeEventListener('icegatheringstatechange', checkGathering);
-            resolve();
-          }
-        };
-        pc.addEventListener('icegatheringstatechange', checkGathering);
-        // Timeout after 3 seconds
-        setTimeout(() => {
-          dlog('ICE gathering timeout, sending answer anyway');
-          pc.removeEventListener('icegatheringstatechange', checkGathering);
-          resolve();
-        }, 3000);
-      });
-    }
-
-    dlog('Sending answer with SDP');
+    // Send answer immediately - candidates will be sent via trickle ICE
+    dlog('Sending answer (trickle ICE - candidates sent separately)');
     wsRef.current.send(JSON.stringify({
       type: 'answer',
       roomCode: roomCodeRef.current,
-      sdp: pc.localDescription // Use localDescription which includes gathered candidates
+      sdp: answer
     }));
   };
 
