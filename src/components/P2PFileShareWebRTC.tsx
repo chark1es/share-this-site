@@ -270,15 +270,17 @@ export default function P2PFileShareWebRTC() {
     peerConnectionRef.current = pc;
     pendingIceCandidatesRef.current = [];
 
+    // Attach handler IMMEDIATELY before anything else
     pc.onicecandidate = (event) => {
+      console.log('[P2P] onicecandidate event fired!', event.candidate ? 'Has candidate' : 'Null candidate');
       if (event.candidate) {
         const cand = event.candidate;
-        dlog('ICE candidate generated:', cand.candidate);
-        dlog('  Type:', cand.type, '| Protocol:', cand.protocol, '| Address:', cand.address);
+        console.log('[P2P] ICE candidate generated:', cand.candidate);
+        console.log('[P2P]   Type:', cand.type, '| Protocol:', cand.protocol, '| Address:', cand.address);
 
         // Send candidate via WebSocket
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          dlog('Sending ICE candidate via WebSocket');
+          console.log('[P2P] Sending ICE candidate via WebSocket');
           wsRef.current.send(JSON.stringify({
             type: 'ice-candidate',
             roomCode: roomCodeRef.current,
@@ -286,15 +288,29 @@ export default function P2PFileShareWebRTC() {
             candidate: cand.toJSON()
           }));
         } else {
-          console.warn('WebSocket not ready, cannot send ICE candidate');
+          console.warn('[P2P] WebSocket not ready, cannot send ICE candidate');
         }
       } else {
-        dlog('ICE gathering complete (null candidate)');
+        console.log('[P2P] ICE gathering complete (null candidate)');
       }
     };
 
+    console.log('[P2P] onicecandidate handler attached');
+
     pc.onicegatheringstatechange = () => {
-      dlog('ICE gathering state:', pc.iceGatheringState);
+      console.log('[P2P] ICE gathering state:', pc.iceGatheringState);
+
+      // Try to manually check for candidates when gathering completes
+      if (pc.iceGatheringState === 'complete') {
+        console.log('[P2P] ICE gathering complete. Checking local description...');
+        if (pc.localDescription) {
+          const candidateLines = pc.localDescription.sdp.split('\n').filter(line => line.startsWith('a=candidate:'));
+          console.log('[P2P] Candidates in SDP:', candidateLines.length);
+          candidateLines.forEach((line, i) => {
+            console.log(`[P2P]   Candidate ${i + 1}:`, line.substring(0, 80) + '...');
+          });
+        }
+      }
     };
 
     pc.onconnectionstatechange = () => {
