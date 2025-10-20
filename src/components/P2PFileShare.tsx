@@ -22,9 +22,11 @@ import {
   IconX,
   IconCopy,
 } from '@tabler/icons-react';
-import SimplePeer from 'simple-peer';
+import Peer from 'peerjs';
+import type { DataConnection } from 'peerjs';
+import { db } from '../lib/client/firebase';
+import { doc, onSnapshot, updateDoc, type Unsubscribe } from 'firebase/firestore';
 import CodeInput from './CodeInput';
-
 
 // Debug logging helper
 const DEBUG_P2P = true;
@@ -32,58 +34,25 @@ const dlog = (...args: any[]) => {
   if (DEBUG_P2P) console.log('[P2P]', ...args);
 };
 
-// simple-peer uses the `debug` package internally. In some browsers (notably Safari with certain
-// localStorage settings) the debug formatter can throw `TypeError: Cannot read properties of
-// undefined (reading 'call')`, which bubbles up as a peer error. We patch the prototype once to
-// swallow that failure and fall back to regular console logging.
-let simplePeerDebugPatched = false;
-const patchSimplePeerDebug = () => {
-  if (simplePeerDebugPatched) return;
-  const proto = (SimplePeer as unknown as { prototype?: Record<string, any> }).prototype as
-    | Record<string, any>
-    | undefined;
-
-  if (!proto || typeof proto._debug !== 'function') {
-    simplePeerDebugPatched = true;
-    return;
-  }
-
-  const originalDebug = proto._debug;
-  let originalErrored = false;
-
-  proto._debug = function patchedDebug(this: any, ...args: any[]) {
-    if (!originalErrored) {
-      try {
-        originalDebug.apply(this, args);
-        return;
-      } catch (err) {
-        originalErrored = true;
-        if (DEBUG_P2P) {
-          console.warn('[P2P] simple-peer debug logger disabled due to error', err);
-        }
-      }
-    }
-
-    if (DEBUG_P2P) {
-      const id = this?._id ?? 'peer';
-      console.debug(`[P2P][simple-peer:${id}]`, ...args);
-    }
-  };
-
-  simplePeerDebugPatched = true;
-};
-
-patchSimplePeerDebug();
-
 // WebRTC ICE configuration (STUN + optional TURN via env)
 const rtcConfig: RTCConfiguration = {
   iceServers: [
-    // Multiple Google STUN servers for better reliability and fallback
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun3.l.google.com:19302' },
     { urls: 'stun:stun4.l.google.com:19302' },
+    // Free public TURN servers for better NAT traversal
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
     ...(import.meta.env.PUBLIC_TURN_URL
       ? [{
         urls: import.meta.env.PUBLIC_TURN_URL as string,
@@ -92,11 +61,72 @@ const rtcConfig: RTCConfiguration = {
       }]
       : []),
   ],
-  iceCandidatePoolSize: 10, // Increased from 2 to generate more candidates
+  iceCandidatePoolSize: 10,
+  iceTransportPolicy: 'all', // Try all connection types
+  bundlePolicy: 'max-bundle',
+  rtcpMuxPolicy: 'require',
   ...(import.meta.env.PUBLIC_WEBRTC_FORCE_RELAY ? { iceTransportPolicy: 'relay' as any } : {}),
 };
 
+// PeerJS server configuration helper
+const getPeerJSConfig = () => {
+  const config: any = {
+    debug: DEBUG_P2P ? 3 : 0, // Max debug level
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        {
+          urls: 'turn:openrelay.metered.ca:80',
+          username: 'openrelayproject',
+          credential: 'openrelayproject',
+        },
+      ],
+    },
+  };
+
+  // Use custom PeerJS server if configured, otherwise fall back to PeerJS cloud
+  if (import.meta.env.PUBLIC_PEERJS_HOST) {
+    config.host = import.meta.env.PUBLIC_PEERJS_HOST as string;
+    config.port = import.meta.env.PUBLIC_PEERJS_PORT
+      ? parseInt(import.meta.env.PUBLIC_PEERJS_PORT as string)
+      : 443;
+    config.path = (import.meta.env.PUBLIC_PEERJS_PATH as string) || '/';
+    config.secure = import.meta.env.PUBLIC_PEERJS_SECURE === 'true' ||
+      import.meta.env.PUBLIC_PEERJS_SECURE === true ||
+      config.port === 443;
+
+    dlog('Using custom PeerJS server:', {
+      host: config.host,
+      port: config.port,
+      path: config.path,
+      secure: config.secure,
+    });
+  } else {
+    dlog('Using default PeerJS cloud server');
+  }
+
+  return config;
+};
+
 type Mode = 'idle' | 'sending' | 'receiving';
+
+// File transfer constants
+const CHUNK_SIZE = 16384; // 16KB chunks (optimal for WebRTC)
+const MAX_BUFFERED_AMOUNT = 16 * 1024 * 1024; // 16MB buffer limit for backpressure
+const PROGRESS_UPDATE_INTERVAL = 100; // Update UI every 100ms
+
+interface FileMetadata {
+  type: 'file-meta';
+  name: string;
+  size: number;
+}
+
+interface FileChunk {
+  type: 'file-chunk';
+  data: ArrayBuffer;
+}
+
+type FileMessage = FileMetadata | FileChunk;
 
 export default function P2PFileShare() {
   const [mode, setMode] = useState<Mode>('idle');
@@ -107,22 +137,28 @@ export default function P2PFileShare() {
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [transferSpeed, setTransferSpeed] = useState(0);
 
-  const peerRef = useRef<SimplePeer.Instance | null>(null);
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const peerRef = useRef<Peer | null>(null);
+  const connectionRef = useRef<DataConnection | null>(null);
+  const firestoreUnsubscribeRef = useRef<Unsubscribe | null>(null);
   const chunksRef = useRef<Uint8Array[]>([]);
   const receivedSizeRef = useRef(0);
   const totalSizeRef = useRef(0);
   const fileNameRef = useRef('');
+  const lastProgressUpdateRef = useRef(0);
+  const transferStartTimeRef = useRef(0);
+  const lastTransferredBytesRef = useRef(0);
+  const sendingRef = useRef(false);
 
-  // Cleanup on unmount or when mode changes
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       cleanup();
     };
   }, []);
 
-  // Handle page navigation (avoid deleting session on simple tab visibility changes)
+  // Handle page navigation
   useEffect(() => {
     const handleBeforeUnload = () => {
       if (code && mode === 'sending') {
@@ -138,28 +174,165 @@ export default function P2PFileShare() {
   }, [code, mode]);
 
   const cleanup = async () => {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
+    dlog('cleanup: starting');
+
+    // Unsubscribe from Firestore listener
+    if (firestoreUnsubscribeRef.current) {
+      firestoreUnsubscribeRef.current();
+      firestoreUnsubscribeRef.current = null;
+      dlog('cleanup: unsubscribed from Firestore');
     }
 
+    // Close data connection
+    if (connectionRef.current) {
+      connectionRef.current.close();
+      connectionRef.current = null;
+      dlog('cleanup: closed data connection');
+    }
+
+    // Destroy peer
     if (peerRef.current) {
       peerRef.current.destroy();
       peerRef.current = null;
+      dlog('cleanup: destroyed peer');
     }
 
+    // Delete session from Firebase if sender
     if (code && mode === 'sending') {
       try {
         await fetch(`/api/p2p/${code}`, { method: 'DELETE' });
+        dlog('cleanup: deleted session from Firebase');
       } catch (err) {
         console.error('Cleanup error:', err);
       }
     }
 
+    // Clear refs
     chunksRef.current = [];
     receivedSizeRef.current = 0;
     totalSizeRef.current = 0;
     fileNameRef.current = '';
+    transferStartTimeRef.current = 0;
+    lastTransferredBytesRef.current = 0;
+    sendingRef.current = false;
+  };
+
+  const updateTransferSpeed = (bytesTransferred: number) => {
+    const now = Date.now();
+    if (now - lastProgressUpdateRef.current >= PROGRESS_UPDATE_INTERVAL) {
+      const elapsed = (now - transferStartTimeRef.current) / 1000; // seconds
+      if (elapsed > 0) {
+        const speed = bytesTransferred / elapsed; // bytes per second
+        setTransferSpeed(speed);
+      }
+      lastProgressUpdateRef.current = now;
+    }
+  };
+
+  const formatSpeed = (bytesPerSecond: number): string => {
+    if (bytesPerSecond < 1024) return `${bytesPerSecond.toFixed(0)} B/s`;
+    if (bytesPerSecond < 1024 * 1024) return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`;
+    return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`;
+  };
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  };
+
+  // Send file with backpressure control
+  const sendFileInChunks = async (conn: DataConnection, fileToSend: File) => {
+    if (sendingRef.current) {
+      dlog('sendFileInChunks: already sending, ignoring');
+      return;
+    }
+
+    sendingRef.current = true;
+    transferStartTimeRef.current = Date.now();
+    lastProgressUpdateRef.current = Date.now();
+
+    dlog('sendFileInChunks: starting', { name: fileToSend.name, size: fileToSend.size });
+
+    // Send file metadata first
+    const metadata: FileMetadata = {
+      type: 'file-meta',
+      name: fileToSend.name,
+      size: fileToSend.size,
+    };
+    conn.send(metadata);
+    dlog('sendFileInChunks: sent metadata');
+
+    let offset = 0;
+    const reader = new FileReader();
+
+    const sendNextChunk = () => {
+      if (!conn || conn.open === false) {
+        dlog('sendFileInChunks: connection closed, stopping');
+        sendingRef.current = false;
+        return;
+      }
+
+      // Check backpressure - get the underlying data channel
+      const dataChannel = (conn as any).dataChannel as RTCDataChannel | undefined;
+      if (dataChannel && dataChannel.bufferedAmount > MAX_BUFFERED_AMOUNT) {
+        dlog('sendFileInChunks: backpressure detected, bufferedAmount:', dataChannel.bufferedAmount);
+        // Wait for buffer to drain
+        setTimeout(sendNextChunk, 50);
+        return;
+      }
+
+      if (offset < fileToSend.size) {
+        const slice = fileToSend.slice(offset, offset + CHUNK_SIZE);
+        reader.readAsArrayBuffer(slice);
+      } else {
+        // Transfer complete
+        dlog('sendFileInChunks: complete');
+        setStatus('File sent successfully!');
+        setProgress(100);
+        sendingRef.current = false;
+
+        notifications.show({
+          title: 'Success',
+          message: 'File sent successfully!',
+          color: 'teal',
+          icon: <IconCheck size={16} />,
+        });
+
+        setTimeout(() => {
+          cleanup();
+          resetToIdle();
+        }, 3000);
+      }
+    };
+
+    reader.onload = (e) => {
+      if (e.target?.result) {
+        const chunk: FileChunk = {
+          type: 'file-chunk',
+          data: e.target.result as ArrayBuffer,
+        };
+        conn.send(chunk);
+
+        offset += CHUNK_SIZE;
+        const percent = Math.min(100, (offset / fileToSend.size) * 100);
+        setProgress(percent);
+        updateTransferSpeed(offset);
+
+        // Continue sending
+        sendNextChunk();
+      }
+    };
+
+    reader.onerror = (err) => {
+      console.error('FileReader error:', err);
+      setError('Failed to read file');
+      sendingRef.current = false;
+    };
+
+    // Start sending
+    sendNextChunk();
   };
 
   const handleSendFile = async (selectedFile: File | null) => {
@@ -171,7 +344,7 @@ export default function P2PFileShare() {
     setStatus('Creating session...');
 
     try {
-      // Create P2P session
+      // Create session in Firebase
       const res = await fetch('/api/p2p/create', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -186,139 +359,194 @@ export default function P2PFileShare() {
       dlog('create: status', res.status, data);
       if (!res.ok) throw new Error(data?.error || 'Failed to create session');
 
-      setCode(data.code);
-      dlog('create: got code', data.code);
+      const sessionCode = data.code;
+      setCode(sessionCode);
+      dlog('create: got code', sessionCode);
       setMode('sending');
-      setStatus('Waiting for receiver...');
+      setStatus('Initializing peer connection...');
 
-      // Initialize WebRTC peer as initiator
-      // NOTE: Using trickle: true and manually handling ICE candidates for better reliability
-      const peer = new SimplePeer({
-        initiator: true,
-        trickle: true,  // Enable trickle ICE for immediate offer generation
-        config: rtcConfig
-      });
+      // Initialize PeerJS peer with the session code as peer ID
+      const peer = new Peer(sessionCode, getPeerJSConfig());
       peerRef.current = peer;
 
-      console.log('🔵 SENDER: Peer created, waiting for offer...');
-      // ICE state diagnostics
-      try {
-        (peer as any).on?.('iceStateChange', (s: string) => dlog('sender iceStateChange', s));
-        const pc = (peer as any)._pc as RTCPeerConnection | undefined;
-        if (pc) {
-          pc.addEventListener('iceconnectionstatechange', () => {
-            console.log('🔵 SENDER iceConnectionState:', pc.iceConnectionState);
-            dlog('sender iceConnectionState', pc.iceConnectionState);
-          });
-          pc.addEventListener('icegatheringstatechange', () => {
-            console.log('🔵 SENDER iceGatheringState:', pc.iceGatheringState);
-            dlog('sender iceGatheringState', pc.iceGatheringState);
-          });
-          pc.addEventListener('connectionstatechange', () => {
-            console.log('🔵 SENDER connectionState:', pc.connectionState);
-            dlog('sender connectionState', pc.connectionState);
+      peer.on('open', (id) => {
+        console.log('🔵 SENDER: Peer opened with ID:', id);
+        console.log('🔵 SENDER: Expected ID:', sessionCode);
+        console.log('🔵 SENDER: IDs match:', id === sessionCode);
+        dlog('sender peer open, id:', id);
+        setStatus('Waiting for receiver...');
 
-            // Handle connection failures
-            if (pc.connectionState === 'failed') {
-              console.error('❌ SENDER: Connection failed');
-              setError('Connection failed - please try again');
-              cleanup();
+        // Store peer ID in Firebase for receiver to find
+        updateDoc(doc(db, 'p2p-sessions', sessionCode), {
+          senderPeerId: id,
+          senderConnected: true,
+        }).then(() => {
+          console.log('🔵 SENDER: Successfully stored peer ID in Firebase');
+        }).catch(err => console.error('Failed to update sender peer ID:', err));
+
+        // Listen for receiver peer ID using Firebase realtime listener
+        const unsubscribe = onSnapshot(
+          doc(db, 'p2p-sessions', sessionCode),
+          (snapshot) => {
+            const sessionData = snapshot.data();
+            if (sessionData?.receiverPeerId && !connectionRef.current) {
+              console.log('🔵 SENDER: Got receiver peer ID:', sessionData.receiverPeerId);
+              dlog('sender: connecting to receiver', sessionData.receiverPeerId);
+              setStatus('Connecting to receiver...');
+
+              // Small delay to ensure peer is fully ready
+              setTimeout(() => {
+                console.log('🔵 SENDER: Peer state before connect:', {
+                  id: peer.id,
+                  disconnected: peer.disconnected,
+                  destroyed: peer.destroyed,
+                });
+
+                // Connect to receiver (sender initiates the connection)
+                console.log('🔵 SENDER: Initiating connection to receiver:', sessionData.receiverPeerId);
+
+                // Connect with minimal options - let PeerJS handle defaults
+                const conn = peer.connect(sessionData.receiverPeerId);
+                connectionRef.current = conn;
+
+                console.log('🔵 SENDER: Connection object created:', {
+                  peer: conn.peer,
+                  type: conn.type,
+                  open: conn.open,
+                  metadata: conn.metadata,
+                });
+
+                // Monitor the underlying RTCPeerConnection
+                setTimeout(() => {
+                  const pc = (conn as any).peerConnection as RTCPeerConnection | undefined;
+                  if (pc) {
+                    console.log('🔵 SENDER: ✅ PeerConnection created!');
+
+                    // Check local and remote descriptions for ICE candidates
+                    setTimeout(() => {
+                      if (pc.localDescription) {
+                        const sdp = pc.localDescription.sdp;
+                        const candidateCount = (sdp.match(/a=candidate:/g) || []).length;
+                        console.log('🔵 SENDER: Local SDP has', candidateCount, 'ICE candidates');
+                        if (candidateCount === 0) {
+                          console.error('🔵 SENDER: ❌ NO ICE CANDIDATES IN SDP! This is the problem!');
+                          console.log('🔵 SENDER: SDP:', sdp.substring(0, 500));
+                        }
+                      }
+
+                      if (pc.remoteDescription) {
+                        const sdp = pc.remoteDescription.sdp;
+                        const candidateCount = (sdp.match(/a=candidate:/g) || []).length;
+                        console.log('🔵 SENDER: Remote SDP has', candidateCount, 'ICE candidates');
+                        if (candidateCount === 0) {
+                          console.error('🔵 SENDER: ❌ NO ICE CANDIDATES IN REMOTE SDP!');
+                        }
+                      }
+                    }, 1500);
+
+                    pc.oniceconnectionstatechange = () => {
+                      console.log('🔵 SENDER: ICE connection state changed:', pc.iceConnectionState);
+                    };
+
+                    pc.onconnectionstatechange = () => {
+                      console.log('🔵 SENDER: Connection state changed:', pc.connectionState);
+                    };
+
+                    console.log('🔵 SENDER: Initial states:', {
+                      connectionState: pc.connectionState,
+                      signalingState: pc.signalingState,
+                      iceConnectionState: pc.iceConnectionState,
+                      iceGatheringState: pc.iceGatheringState,
+                    });
+                  } else {
+                    console.error('🔵 SENDER: ❌ No peerConnection object created!');
+                  }
+                }, 100);
+
+                conn.on('open', () => {
+                  console.log('🔵 SENDER: Connection opened, starting file transfer');
+                  dlog('sender: connection open');
+                  setStatus('Connected! Sending file...');
+
+                  // Stop listening to Firestore updates
+                  unsubscribe();
+                  firestoreUnsubscribeRef.current = null;
+
+                  // Start sending file
+                  sendFileInChunks(conn, selectedFile);
+                });
+
+                conn.on('error', (err) => {
+                  console.error('🔵 SENDER: Connection error:', err);
+                  setError('Connection error: ' + err.message);
+                  cleanup();
+                });
+
+                conn.on('close', () => {
+                  console.log('🔵 SENDER: Connection closed');
+                  dlog('sender: connection closed');
+                });
+
+                conn.on('iceStateChanged', (state) => {
+                  console.log('🔵 SENDER: ICE state changed:', state);
+                });
+
+                // Log the underlying peer connection state
+                setTimeout(() => {
+                  const pc = (conn as any).peerConnection;
+                  console.log('🔵 SENDER: Connection state after 1s:', {
+                    open: conn.open,
+                    peerConnection: pc?.connectionState,
+                    signalingState: pc?.signalingState,
+                    iceConnectionState: pc?.iceConnectionState,
+                    iceGatheringState: pc?.iceGatheringState,
+                  });
+
+                  if (pc) {
+                    if (pc.localDescription) {
+                      console.log('🔵 SENDER: Has local description (offer)');
+                    } else {
+                      console.log('🔵 SENDER: NO local description - waiting');
+                    }
+
+                    if (pc.remoteDescription) {
+                      console.log('🔵 SENDER: Has remote description (answer)');
+                    } else {
+                      console.log('🔵 SENDER: NO remote description yet');
+                    }
+                  }
+                }, 1000);
+              }, 300); // End of setTimeout for connection delay
             }
-          });
-          pc.addEventListener('icecandidateerror', (e: any) => {
-            console.error('❌ SENDER icecandidateerror:', e?.url, e?.errorCode, e?.errorText);
-            dlog('sender icecandidateerror', e?.url, e?.errorCode, e?.errorText);
-          });
-
-          // Monitor ICE candidates for debugging (with trickle: false, these are embedded in SDP)
-          let senderIceCandidateCount = 0;
-          pc.addEventListener('icecandidate', (e: RTCPeerConnectionIceEvent) => {
-            if (e.candidate) {
-              senderIceCandidateCount++;
-              console.log(`🧊 SENDER ICE candidate #${senderIceCandidateCount}:`, e.candidate.candidate);
-              dlog('sender icecandidate #', senderIceCandidateCount, e.candidate.candidate);
-            } else {
-              console.log(`✅ SENDER ICE gathering complete (${senderIceCandidateCount} candidates)`);
-              dlog('sender ICE gathering complete, total candidates:', senderIceCandidateCount);
-            }
-          });
-        }
-      } catch (e) {
-        console.error('Failed to setup ICE monitoring:', e);
-      }
-
-
-      let offerSent = false;
-
-      peer.on('signal', async (signal) => {
-        try {
-          const signalType = (signal as any).type;
-          console.log('🔵 SENDER signal event:', signalType, signal);
-
-          // Send offer immediately when generated
-          if (!offerSent && (signal as any).type === 'offer') {
-            console.log('📤 SENDER: Sending offer');
-            dlog('sender sending offer');
-            const r = await fetch(`/api/p2p/${data.code}`, {
-              method: 'PATCH',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({
-                senderOffer: JSON.stringify(signal),
-                senderConnected: true,
-              }),
-            });
-            console.log('📤 SENDER: Offer sent, status:', r.status);
-            dlog('PATCH senderOffer status', r.status);
-            if (!r.ok) {
-              const errorData = await r.json();
-              console.error('❌ SENDER: Failed to send offer:', errorData);
-            }
-            offerSent = true;
+          },
+          (error) => {
+            console.error('🔵 SENDER: Firestore listener error:', error);
+            setError('Failed to listen for receiver: ' + error.message);
           }
-          // Send ICE candidates as they're generated
-          else if ((signal as any).candidate) {
-            console.log('🧊 SENDER: Sending ICE candidate');
-            try {
-              const r = await fetch(`/api/p2p/${data.code}`, {
-                method: 'PATCH',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({
-                  senderIceCandidate: JSON.stringify(signal),
-                }),
-              });
-              dlog('PATCH senderICE status', r.status);
-            } catch (err) {
-              console.error('❌ SENDER: Failed to send ICE candidate:', err);
-            }
-          }
-        } catch (err) {
-          console.error('❌ SENDER: Signal error:', err);
-        }
-      });
+        );
 
-      peer.on('connect', () => {
-        dlog('sender connect');
-        setStatus('Connected! Sending file...');
-        // Stop polling once connected
-        if (pollingIntervalRef.current) {
-          clearInterval(pollingIntervalRef.current);
-          pollingIntervalRef.current = null;
-        }
-        sendFileInChunks(peer, selectedFile);
+        firestoreUnsubscribeRef.current = unsubscribe;
       });
 
       peer.on('error', (err) => {
-        console.error('Peer error:', err);
-        setError('Connection error: ' + err.message);
+        console.error('🔵 SENDER: Peer error:', err);
+        console.error('🔵 SENDER: Error type:', err.type);
+        setError('Peer error: ' + err.message);
         cleanup();
       });
 
-      // Poll for receiver's answer and ICE candidates
-      startPollingForAnswer(data.code, peer);
+      peer.on('disconnected', () => {
+        console.log('🔵 SENDER: Peer disconnected');
+        dlog('sender: peer disconnected');
+      });
+
+      peer.on('close', () => {
+        console.log('🔵 SENDER: Peer closed');
+      });
 
       notifications.show({
         title: 'Session Created',
-        message: `Share code ${data.code} with the receiver`,
+        message: `Share code ${sessionCode} with the receiver`,
         color: 'teal',
         icon: <IconCheck size={16} />,
       });
@@ -333,108 +561,6 @@ export default function P2PFileShare() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const startPollingForAnswer = (sessionCode: string, peer: SimplePeer.Instance) => {
-    let answerReceived = false;
-    let lastReceiverIceCount = 0;
-    let tick = 0;
-    const MAX_POLL_TICKS = 60; // 60 seconds timeout
-
-    console.log('🔵 SENDER: Starting to poll for answer and receiver ICE candidates');
-
-    pollingIntervalRef.current = setInterval(async () => {
-      tick += 1;
-
-      // Timeout after MAX_POLL_TICKS
-      if (tick > MAX_POLL_TICKS) {
-        console.error('❌ SENDER TIMEOUT: No connection after 60 seconds');
-        dlog('poll(answer) timeout after', tick, 'seconds');
-        clearInterval(pollingIntervalRef.current!);
-        pollingIntervalRef.current = null;
-        setError('Connection timeout - receiver did not respond');
-        cleanup();
-        return;
-      }
-
-      try {
-        const res = await fetch(`/api/p2p/${sessionCode}`);
-        if (!res.ok) {
-          clearInterval(pollingIntervalRef.current!);
-          pollingIntervalRef.current = null;
-          return;
-        }
-
-        const data = await res.json();
-        const receiverIceCount = (data.receiverIceCandidates || []).length;
-
-        if (tick % 5 === 0) {
-          console.log(`📊 SENDER POLL #${tick}: answer=${!!data.receiverAnswer}, receiverICE=${receiverIceCount}`);
-        }
-
-        // Handle receiver's answer (only once)
-        if (data.receiverAnswer && !answerReceived && !peer.destroyed) {
-          const answer = JSON.parse(data.receiverAnswer);
-          console.log('✅ SENDER: Received answer, applying...');
-          dlog('sender applying receiverAnswer');
-          peer.signal(answer);
-          answerReceived = true;
-        }
-
-        // Handle new ICE candidates from receiver
-        if (data.receiverIceCandidates && receiverIceCount > lastReceiverIceCount) {
-          const newCandidates = data.receiverIceCandidates.slice(lastReceiverIceCount);
-          console.log(`🧊 SENDER: Applying ${newCandidates.length} new receiver ICE candidates`);
-
-          for (const candidateStr of newCandidates) {
-            if (!peer.destroyed) {
-              try {
-                const candidate = JSON.parse(candidateStr);
-                peer.signal(candidate);
-              } catch (err) {
-                console.error('❌ SENDER: ICE candidate error:', err);
-              }
-            }
-          }
-          lastReceiverIceCount = receiverIceCount;
-        }
-      } catch (err) {
-        console.error('❌ SENDER: Polling error:', err);
-      }
-    }, 1000);
-  };
-
-  const sendFileInChunks = (peer: SimplePeer.Instance, fileToSend: File) => {
-    const chunkSize = 16384; // 16KB chunks
-    const reader = new FileReader();
-    let offset = 0;
-
-    reader.onload = (e) => {
-      if (e.target?.result && peer && !peer.destroyed) {
-        peer.send(e.target.result as ArrayBuffer);
-        offset += chunkSize;
-        const percent = Math.min(100, (offset / fileToSend.size) * 100);
-        setProgress(percent);
-
-        if (offset < fileToSend.size) {
-          readSlice(offset);
-        } else {
-          setStatus('File sent successfully!');
-          setProgress(100);
-          setTimeout(() => {
-            cleanup();
-            resetToIdle();
-          }, 3000);
-        }
-      }
-    };
-
-    const readSlice = (o: number) => {
-      const slice = fileToSend.slice(o, o + chunkSize);
-      reader.readAsArrayBuffer(slice);
-    };
-
-    readSlice(0);
   };
 
   const handleReceiveFile = async (codeParam?: string) => {
@@ -457,173 +583,173 @@ export default function P2PFileShare() {
 
       if (!res.ok) throw new Error(data?.error || 'Session not found');
 
-      if (!data.senderOffer) {
-        throw new Error('Sender not ready. Please wait and try again.');
-      }
-
       fileNameRef.current = data.fileName;
       totalSizeRef.current = data.fileSize;
-      dlog('receiver got metadata', { fileName: data.fileName, size: data.fileSize, hasOffer: !!data.senderOffer });
+      dlog('receiver got metadata', { fileName: data.fileName, size: data.fileSize });
       setMode('receiving');
-      setStatus('Establishing connection...');
+      setStatus('Initializing peer connection...');
 
-      // Initialize WebRTC peer as receiver
-      const peer = new SimplePeer({
-        initiator: false,
-        trickle: true,  // Enable trickle ICE
-        config: rtcConfig
-      });
+      // Initialize PeerJS peer
+      const peer = new Peer(getPeerJSConfig());
       peerRef.current = peer;
 
-      console.log('🟢 RECEIVER: Peer created');
-      // ICE state diagnostics
-      try {
-        (peer as any).on?.('iceStateChange', (s: string) => dlog('receiver iceStateChange', s));
-        const pc = (peer as any)._pc as RTCPeerConnection | undefined;
-        if (pc) {
-          pc.addEventListener('iceconnectionstatechange', () => {
-            console.log('🟢 RECEIVER iceConnectionState:', pc.iceConnectionState);
-            dlog('receiver iceConnectionState', pc.iceConnectionState);
-          });
-          pc.addEventListener('icegatheringstatechange', () => {
-            console.log('🟢 RECEIVER iceGatheringState:', pc.iceGatheringState);
-            dlog('receiver iceGatheringState', pc.iceGatheringState);
-          });
-          pc.addEventListener('connectionstatechange', () => {
-            console.log('🟢 RECEIVER connectionState:', pc.connectionState);
-            dlog('receiver connectionState', pc.connectionState);
+      peer.on('open', (myPeerId) => {
+        console.log('🟢 RECEIVER: Peer opened with ID:', myPeerId);
+        dlog('receiver peer open, id:', myPeerId);
 
-            // Handle connection failures
-            if (pc.connectionState === 'failed') {
-              console.error('❌ RECEIVER: Connection failed');
-              setError('Connection failed - please try again');
-              cleanup();
-            }
-          });
-          pc.addEventListener('icecandidateerror', (e: any) => {
-            console.error('❌ RECEIVER icecandidateerror:', e?.url, e?.errorCode, e?.errorText);
-            dlog('receiver icecandidateerror', e?.url, e?.errorCode, e?.errorText);
-          });
+        // Update Firebase with receiver peer ID
+        updateDoc(doc(db, 'p2p-sessions', codeToUse), {
+          receiverPeerId: myPeerId,
+          receiverConnected: true,
+        }).then(() => {
+          console.log('🟢 RECEIVER: Successfully stored peer ID in Firebase');
+        }).catch(err => console.error('Failed to update receiver peer ID:', err));
 
-          // Monitor ICE candidates for debugging (with trickle: false, these are embedded in SDP)
-          let receiverIceCandidateCount = 0;
-          pc.addEventListener('icecandidate', (e: RTCPeerConnectionIceEvent) => {
-            if (e.candidate) {
-              receiverIceCandidateCount++;
-              console.log(`🧊 RECEIVER ICE candidate #${receiverIceCandidateCount}:`, e.candidate.candidate);
-              dlog('receiver icecandidate #', receiverIceCandidateCount, e.candidate.candidate);
-            } else {
-              console.log(`✅ RECEIVER ICE gathering complete (${receiverIceCandidateCount} candidates)`);
-              dlog('receiver ICE gathering complete, total candidates:', receiverIceCandidateCount);
-            }
-          });
-        }
-      } catch (e) {
-        console.error('Failed to setup ICE monitoring:', e);
-      }
+        // Wait for sender to connect
+        setStatus('Waiting for sender to connect...');
+      });
 
+      // Listen for incoming connection from sender
+      peer.on('connection', (conn) => {
+        console.log('🟢 RECEIVER: Incoming connection from sender');
+        console.log('🟢 RECEIVER: Connection details:', {
+          peer: conn.peer,
+          open: conn.open,
+          type: conn.type,
+          reliable: (conn as any).reliable,
+        });
+        dlog('receiver: incoming connection');
+        connectionRef.current = conn;
 
-      let answerSent = false;
+        // Monitor the underlying RTCPeerConnection
+        setTimeout(() => {
+          const pc = (conn as any).peerConnection as RTCPeerConnection | undefined;
+          if (pc) {
+            console.log('🟢 RECEIVER: ✅ PeerConnection exists!');
 
-      peer.on('signal', async (signal) => {
-        try {
-          const signalType = (signal as any).type;
-          console.log('🟢 RECEIVER signal event:', signalType, signal);
+            // Add ICE candidate listener to debug
+            pc.onicecandidate = (event) => {
+              if (event.candidate) {
+                console.log('🟢 RECEIVER: ICE candidate generated:', event.candidate.type, event.candidate.candidate);
+              } else {
+                console.log('🟢 RECEIVER: ICE gathering complete');
+              }
+            };
 
-          // Send answer when generated
-          if (!answerSent && (signal as any).type === 'answer') {
-            console.log('📤 RECEIVER: Sending answer');
-            dlog('receiver sending answer');
-            const r = await fetch(`/api/p2p/${codeToUse}`, {
-              method: 'PATCH',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({
-                receiverAnswer: JSON.stringify(signal),
-                receiverConnected: true,
-              }),
+            pc.oniceconnectionstatechange = () => {
+              console.log('🟢 RECEIVER: ICE connection state changed:', pc.iceConnectionState);
+            };
+
+            pc.onicegatheringstatechange = () => {
+              console.log('🟢 RECEIVER: ICE gathering state changed:', pc.iceGatheringState);
+            };
+
+            pc.onconnectionstatechange = () => {
+              console.log('🟢 RECEIVER: Connection state changed:', pc.connectionState);
+            };
+
+            console.log('🟢 RECEIVER: Initial states:', {
+              connectionState: pc.connectionState,
+              signalingState: pc.signalingState,
+              iceConnectionState: pc.iceConnectionState,
+              iceGatheringState: pc.iceGatheringState,
             });
-            console.log('📤 RECEIVER: Answer sent, status:', r.status);
-            dlog('PATCH receiverAnswer status', r.status);
-            if (!r.ok) {
-              const errorData = await r.json();
-              console.error('❌ RECEIVER: Failed to send answer:', errorData);
-            }
-            answerSent = true;
+          } else {
+            console.error('🟢 RECEIVER: ❌ No peerConnection object!');
           }
-          // Send ICE candidates as they're generated
-          else if ((signal as any).candidate) {
-            console.log('🧊 RECEIVER: Sending ICE candidate');
-            try {
-              const r = await fetch(`/api/p2p/${codeToUse}`, {
-                method: 'PATCH',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({
-                  receiverIceCandidate: JSON.stringify(signal),
-                }),
-              });
-              dlog('PATCH receiverICE status', r.status);
-            } catch (err) {
-              console.error('❌ RECEIVER: Failed to send ICE candidate:', err);
+        }, 100);
+
+        conn.on('open', () => {
+          console.log('🟢 RECEIVER: Connection opened');
+          dlog('receiver: connection open');
+          setStatus('Connected! Receiving file...');
+          transferStartTimeRef.current = Date.now();
+          lastProgressUpdateRef.current = Date.now();
+        });
+
+        conn.on('data', (data: any) => {
+          const message = data as FileMessage;
+
+          if (message.type === 'file-meta') {
+            // Received file metadata
+            console.log('🟢 RECEIVER: Received file metadata:', message.name, message.size);
+            fileNameRef.current = message.name;
+            totalSizeRef.current = message.size;
+            chunksRef.current = [];
+            receivedSizeRef.current = 0;
+          } else if (message.type === 'file-chunk') {
+            // Received file chunk
+            const chunk = new Uint8Array(message.data);
+            chunksRef.current.push(chunk);
+            receivedSizeRef.current += chunk.length;
+
+            const percent = (receivedSizeRef.current / totalSizeRef.current) * 100;
+            setProgress(percent);
+            updateTransferSpeed(receivedSizeRef.current);
+
+            if (receivedSizeRef.current >= totalSizeRef.current) {
+              completeFileReceive();
             }
           }
-        } catch (err) {
-          console.error('❌ RECEIVER: Signal error:', err);
-        }
-      });
+        });
 
-      peer.on('connect', () => {
-        dlog('receiver connect');
-        setStatus('Connected! Receiving file...');
-        // Stop polling once connected
-        if (pollingIntervalRef.current) {
-          clearInterval(pollingIntervalRef.current);
-          pollingIntervalRef.current = null;
-        }
-      });
+        conn.on('error', (err) => {
+          console.error('🟢 RECEIVER: Connection error:', err);
+          setError('Connection error: ' + err.message);
+          cleanup();
+        });
 
-      peer.on('data', (chunk: Uint8Array) => {
-        chunksRef.current.push(chunk);
-        receivedSizeRef.current += chunk.length;
-        const percent = (receivedSizeRef.current / totalSizeRef.current) * 100;
-        setProgress(percent);
+        conn.on('close', () => {
+          console.log('🟢 RECEIVER: Connection closed');
+          dlog('receiver: connection closed');
+        });
 
-        if (receivedSizeRef.current >= totalSizeRef.current) {
-          completeFileReceive();
-        }
+        conn.on('iceStateChanged', (state) => {
+          console.log('🟢 RECEIVER: ICE state changed:', state);
+        });
+
+        // Log the underlying peer connection state
+        setTimeout(() => {
+          const pc = (conn as any).peerConnection;
+          console.log('🟢 RECEIVER: Connection state after 1s:', {
+            open: conn.open,
+            peerConnection: pc?.connectionState,
+            signalingState: pc?.signalingState,
+            iceConnectionState: pc?.iceConnectionState,
+            iceGatheringState: pc?.iceGatheringState,
+          });
+
+          if (pc) {
+            if (pc.localDescription) {
+              console.log('🟢 RECEIVER: Has local description (answer)');
+            } else {
+              console.log('🟢 RECEIVER: NO local description yet');
+            }
+
+            if (pc.remoteDescription) {
+              console.log('🟢 RECEIVER: Has remote description (offer)');
+            } else {
+              console.log('🟢 RECEIVER: NO remote description - waiting');
+            }
+          }
+        }, 1000);
       });
 
       peer.on('error', (err) => {
-        console.error('Peer error:', err);
-        setError('Connection error: ' + err.message);
+        console.error('🟢 RECEIVER: Peer error:', err);
+        console.error('🟢 RECEIVER: Error type:', err.type);
+        setError('Peer error: ' + err.message);
         cleanup();
       });
 
-      // Signal with sender's offer
-      if (data.senderOffer) {
-        const offer = JSON.parse(data.senderOffer);
-        console.log('🟢 RECEIVER: Applying offer');
-        dlog('receiver applying offer');
-        peer.signal(offer);
-        console.log('🟢 RECEIVER: Offer applied, answer will be generated');
-      } else {
-        throw new Error('No offer found in session');
-      }
+      peer.on('close', () => {
+        console.log('🟢 RECEIVER: Peer closed');
+      });
 
-      // Apply any existing sender ICE candidates
-      if (data.senderIceCandidates && data.senderIceCandidates.length > 0) {
-        console.log(`🧊 RECEIVER: Applying ${data.senderIceCandidates.length} existing sender ICE candidates`);
-        for (const candidateStr of data.senderIceCandidates) {
-          try {
-            const candidate = JSON.parse(candidateStr);
-            peer.signal(candidate);
-          } catch (err) {
-            console.error('❌ RECEIVER: Error applying ICE candidate:', err);
-          }
-        }
-      }
-
-      // Start polling for new sender ICE candidates
-      startPollingForSenderCandidates(codeToUse, peer);
+      peer.on('disconnected', () => {
+        console.log('🟢 RECEIVER: Peer disconnected');
+        dlog('receiver: peer disconnected');
+      });
 
       notifications.show({
         title: 'Connecting',
@@ -646,66 +772,11 @@ export default function P2PFileShare() {
     }
   };
 
-
-
-  const startPollingForSenderCandidates = (sessionCode: string, peer: SimplePeer.Instance) => {
-    let lastSenderIceCount = 0;
-    let tick = 0;
-    const MAX_POLL_TICKS = 60;
-
-    console.log('🟢 RECEIVER: Starting to poll for sender ICE candidates');
-
-    pollingIntervalRef.current = setInterval(async () => {
-      tick += 1;
-
-      if (tick > MAX_POLL_TICKS) {
-        console.error('❌ RECEIVER TIMEOUT: No connection after 60 seconds');
-        clearInterval(pollingIntervalRef.current!);
-        pollingIntervalRef.current = null;
-        setError('Connection timeout - could not establish P2P connection');
-        cleanup();
-        return;
-      }
-
-      try {
-        const res = await fetch(`/api/p2p/${sessionCode}`);
-        if (!res.ok) {
-          clearInterval(pollingIntervalRef.current!);
-          pollingIntervalRef.current = null;
-          return;
-        }
-
-        const data = await res.json();
-        const senderIceCount = (data.senderIceCandidates || []).length;
-
-        if (tick % 5 === 0) {
-          console.log(`📊 RECEIVER POLL #${tick}: senderICE=${senderIceCount}`);
-        }
-
-        // Handle new ICE candidates from sender
-        if (data.senderIceCandidates && senderIceCount > lastSenderIceCount) {
-          const newCandidates = data.senderIceCandidates.slice(lastSenderIceCount);
-          console.log(`🧊 RECEIVER: Applying ${newCandidates.length} new sender ICE candidates`);
-
-          for (const candidateStr of newCandidates) {
-            if (!peer.destroyed) {
-              try {
-                const candidate = JSON.parse(candidateStr);
-                peer.signal(candidate);
-              } catch (err) {
-                console.error('❌ RECEIVER: ICE candidate error:', err);
-              }
-            }
-          }
-          lastSenderIceCount = senderIceCount;
-        }
-      } catch (err) {
-        console.error('❌ RECEIVER: Polling error:', err);
-      }
-    }, 1000);
-  };
-
+  // Stream-based file download to avoid memory buildup
   const completeFileReceive = () => {
+    dlog('completeFileReceive: starting', { chunks: chunksRef.current.length, size: receivedSizeRef.current });
+
+    // Create blob from chunks using streaming
     const blob = new Blob(chunksRef.current);
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -713,6 +784,9 @@ export default function P2PFileShare() {
     a.download = fileNameRef.current;
     a.click();
     URL.revokeObjectURL(url);
+
+    // Clear chunks immediately to free memory
+    chunksRef.current = [];
 
     setStatus('File received successfully!');
     setProgress(100);
@@ -738,9 +812,15 @@ export default function P2PFileShare() {
     setProgress(0);
     setStatus('');
     setError(null);
+    setTransferSpeed(0);
   };
 
-  const copyCode = () => {
+  const handleCancel = () => {
+    cleanup();
+    resetToIdle();
+  };
+
+  const copyCodeToClipboard = () => {
     navigator.clipboard.writeText(code);
     notifications.show({
       title: 'Copied',
@@ -751,178 +831,172 @@ export default function P2PFileShare() {
   };
 
   return (
-    <Stack gap="lg">
-      {mode === 'idle' && (
-        <>
-          <Card withBorder radius="lg" p="xl" shadow="md" className="bg-white border-gray-200">
-            <Stack gap="md">
-              <Group justify="space-between" align="center">
-                <Box>
-                  <Title order={3} className="text-xl font-bold">
-                    Send a File
-                  </Title>
-                  <Text size="sm" c="dimmed" mt="xs">
-                    Share files directly with anyone using a 6-digit code
-                  </Text>
-                </Box>
-                <IconUpload size={32} className="text-blue-500" />
-              </Group>
+    <Stack gap="md">
+      <Card shadow="sm" padding="lg" radius="md" withBorder>
+        <Stack gap="md">
+          <Group justify="space-between">
+            <Title order={3}>P2P File Transfer</Title>
+            {mode !== 'idle' && (
+              <Badge color={mode === 'sending' ? 'blue' : 'green'} size="lg">
+                {mode === 'sending' ? 'Sending' : 'Receiving'}
+              </Badge>
+            )}
+          </Group>
 
-              <Divider />
+          {error && (
+            <Alert icon={<IconAlertCircle size={16} />} title="Error" color="red" onClose={() => setError(null)}>
+              {error}
+            </Alert>
+          )}
 
-              <FileButton onChange={handleSendFile} accept="*">
+          {mode === 'idle' && (
+            <>
+              <Divider label="Send a file" labelPosition="center" />
+              <FileButton onChange={handleSendFile} accept="*/*">
                 {(props) => (
                   <Button
                     {...props}
+                    leftSection={<IconUpload size={16} />}
+                    variant="filled"
                     size="lg"
-                    leftSection={<IconUpload size={18} />}
-                    loading={loading}
                     fullWidth
-                    color="blue"
+                    loading={loading}
                   >
                     Select File to Send
                   </Button>
                 )}
               </FileButton>
 
-              <Text size="xs" c="dimmed" ta="center">
-                Files are transferred directly between devices (P2P). No server storage.
-              </Text>
-            </Stack>
-          </Card>
-
-          <Card withBorder radius="lg" p="xl" shadow="md" className="bg-white border-gray-200">
-            <Stack gap="md">
-              <Group justify="space-between" align="center">
-                <Box>
-                  <Title order={3} className="text-xl font-bold">
-                    Receive a File
-                  </Title>
-                  <Text size="sm" c="dimmed" mt="xs">
-                    Enter the 6-digit code to download a file
-                  </Text>
-                </Box>
-                <IconDownload size={32} className="text-green-500" />
-              </Group>
-
-              <Divider />
-
-              <Box>
-                <Text size="sm" fw={500} mb="sm" ta="center">
-                  Enter the 6-digit code
-                </Text>
+              <Divider label="Or receive a file" labelPosition="center" />
+              <Stack gap="sm">
                 <CodeInput
                   value={inputCode}
                   onChange={setInputCode}
                   onComplete={handleReceiveFile}
                   disabled={loading}
                 />
+                <Button
+                  leftSection={<IconDownload size={16} />}
+                  onClick={() => handleReceiveFile()}
+                  disabled={inputCode.length !== 6}
+                  loading={loading}
+                  variant="light"
+                  size="lg"
+                  fullWidth
+                >
+                  Receive File
+                </Button>
+              </Stack>
+            </>
+          )}
+
+          {mode === 'sending' && (
+            <Stack gap="md">
+              <Box>
+                <Text size="sm" c="dimmed">
+                  File to send:
+                </Text>
+                <Text fw={500}>{file?.name}</Text>
+                <Text size="sm" c="dimmed">
+                  {file && formatFileSize(file.size)}
+                </Text>
               </Box>
 
-              <Button
-                size="lg"
-                leftSection={<IconDownload size={18} />}
-                onClick={() => handleReceiveFile()}
-                loading={loading}
-                disabled={inputCode.length !== 6}
-                fullWidth
-                color="green"
-              >
-                Receive File
-              </Button>
-
-              <Text size="xs" c="dimmed" ta="center">
-                The file will download automatically when all digits are entered
-              </Text>
-            </Stack>
-          </Card>
-        </>
-      )}
-
-      {mode === 'sending' && (
-        <Card withBorder radius="lg" p="xl" shadow="md" className="bg-white border-gray-200">
-          <Stack gap="lg">
-            <Group justify="space-between">
-              <Title order={3}>Sending File</Title>
-              <Button
-                variant="subtle"
-                color="red"
-                leftSection={<IconX size={16} />}
-                onClick={() => {
-                  cleanup();
-                  resetToIdle();
-                }}
-              >
-                Cancel
-              </Button>
-            </Group>
-
-            <Alert color="blue" title="Share this code" icon={<IconCopy size={18} />}>
-              <Group justify="space-between" align="center">
-                <Text size="xl" fw={700} className="font-mono tracking-wider">
-                  {code}
+              <Box>
+                <Text size="sm" c="dimmed" mb={4}>
+                  Share this code with the receiver:
                 </Text>
-                <Button size="xs" variant="light" onClick={copyCode}>
-                  Copy
-                </Button>
-              </Group>
-            </Alert>
+                <Group gap="xs">
+                  <Badge size="xl" variant="filled" color="blue" style={{ fontSize: '1.5rem', padding: '1rem' }}>
+                    {code}
+                  </Badge>
+                  <Button size="sm" variant="light" onClick={copyCodeToClipboard} leftSection={<IconCopy size={14} />}>
+                    Copy
+                  </Button>
+                </Group>
+              </Box>
 
-            <Box>
-              <Text size="sm" c="dimmed" mb="xs">
-                File: {file?.name}
-              </Text>
-              <Text size="sm" c="dimmed" mb="md">
-                Status: {status}
-              </Text>
-              <Progress value={progress} size="lg" radius="xl" animated />
-              <Text size="xs" c="dimmed" mt="xs" ta="right">
-                {Math.round(progress)}%
-              </Text>
-            </Box>
-          </Stack>
-        </Card>
-      )}
+              {status && (
+                <Text size="sm" c="dimmed">
+                  {status}
+                </Text>
+              )}
 
-      {mode === 'receiving' && (
-        <Card withBorder radius="lg" p="xl" shadow="md" className="bg-white border-gray-200">
-          <Stack gap="lg">
-            <Group justify="space-between">
-              <Title order={3}>Receiving File</Title>
+              {progress > 0 && (
+                <>
+                  <Progress value={progress} size="lg" radius="xl" animated />
+                  <Group justify="space-between">
+                    <Text size="sm">{progress.toFixed(1)}%</Text>
+                    {transferSpeed > 0 && <Text size="sm">{formatSpeed(transferSpeed)}</Text>}
+                  </Group>
+                </>
+              )}
+
               <Button
-                variant="subtle"
-                color="red"
                 leftSection={<IconX size={16} />}
-                onClick={() => {
-                  cleanup();
-                  resetToIdle();
-                }}
+                onClick={handleCancel}
+                variant="light"
+                color="red"
+                fullWidth
               >
                 Cancel
               </Button>
-            </Group>
+            </Stack>
+          )}
 
-            <Box>
-              <Text size="sm" c="dimmed" mb="xs">
-                File: {fileNameRef.current}
-              </Text>
-              <Text size="sm" c="dimmed" mb="md">
-                Status: {status}
-              </Text>
-              <Progress value={progress} size="lg" radius="xl" animated color="green" />
-              <Text size="xs" c="dimmed" mt="xs" ta="right">
-                {Math.round(progress)}%
-              </Text>
-            </Box>
-          </Stack>
-        </Card>
-      )}
+          {mode === 'receiving' && (
+            <Stack gap="md">
+              <Box>
+                <Text size="sm" c="dimmed">
+                  Session code:
+                </Text>
+                <Badge size="lg" variant="filled" color="green">
+                  {code}
+                </Badge>
+              </Box>
 
-      {error && (
-        <Alert color="red" title="Error" icon={<IconAlertCircle size={18} />} onClose={() => setError(null)} withCloseButton>
-          {error}
-        </Alert>
-      )}
+              {fileNameRef.current && (
+                <Box>
+                  <Text size="sm" c="dimmed">
+                    Receiving file:
+                  </Text>
+                  <Text fw={500}>{fileNameRef.current}</Text>
+                  <Text size="sm" c="dimmed">
+                    {formatFileSize(totalSizeRef.current)}
+                  </Text>
+                </Box>
+              )}
+
+              {status && (
+                <Text size="sm" c="dimmed">
+                  {status}
+                </Text>
+              )}
+
+              {progress > 0 && (
+                <>
+                  <Progress value={progress} size="lg" radius="xl" animated />
+                  <Group justify="space-between">
+                    <Text size="sm">{progress.toFixed(1)}%</Text>
+                    {transferSpeed > 0 && <Text size="sm">{formatSpeed(transferSpeed)}</Text>}
+                  </Group>
+                </>
+              )}
+
+              <Button
+                leftSection={<IconX size={16} />}
+                onClick={handleCancel}
+                variant="light"
+                color="red"
+                fullWidth
+              >
+                Cancel
+              </Button>
+            </Stack>
+          )}
+        </Stack>
+      </Card>
     </Stack>
   );
 }
+

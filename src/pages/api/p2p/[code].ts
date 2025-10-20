@@ -45,6 +45,9 @@ export async function GET({ params }: APIContext): Promise<Response> {
                 fileType: data.fileType,
                 senderConnected: data.senderConnected,
                 receiverConnected: data.receiverConnected,
+                senderPeerId: data.senderPeerId,
+                receiverPeerId: data.receiverPeerId,
+                // Legacy fields for backward compatibility
                 senderOffer: data.senderOffer,
                 receiverAnswer: data.receiverAnswer,
                 senderIceCandidates: data.senderIceCandidates || [],
@@ -102,6 +105,23 @@ export async function PATCH({
         // Update session with signaling data
         const updates: any = {};
 
+        // PeerJS peer IDs
+        if (body.senderPeerId !== undefined) {
+            updates.senderPeerId = body.senderPeerId;
+        }
+        if (body.receiverPeerId !== undefined) {
+            updates.receiverPeerId = body.receiverPeerId;
+        }
+
+        // Connection status
+        if (body.senderConnected !== undefined) {
+            updates.senderConnected = body.senderConnected;
+        }
+        if (body.receiverConnected !== undefined) {
+            updates.receiverConnected = body.receiverConnected;
+        }
+
+        // Legacy simple-peer signaling (for backward compatibility)
         if (body.senderOffer !== undefined) {
             updates.senderOffer = body.senderOffer;
         }
@@ -117,12 +137,6 @@ export async function PATCH({
             updates.receiverIceCandidates = FieldValue.arrayUnion(
                 body.receiverIceCandidate
             );
-        }
-        if (body.senderConnected !== undefined) {
-            updates.senderConnected = body.senderConnected;
-        }
-        if (body.receiverConnected !== undefined) {
-            updates.receiverConnected = body.receiverConnected;
         }
         if (body.active !== undefined) {
             updates.active = body.active;
