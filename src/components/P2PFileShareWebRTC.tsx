@@ -52,14 +52,26 @@ const buildIceServers = (): RTCIceServer[] => {
   return iceServers;
 };
 
+// Detect if we're on localhost (for debugging)
+const isLocalhost = typeof window !== 'undefined' &&
+  (window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1' ||
+    window.location.hostname === '[::1]');
+
 const rtcConfig: RTCConfiguration = {
   iceServers: buildIceServers(),
   bundlePolicy: 'max-bundle',
   rtcpMuxPolicy: 'require',
+  iceTransportPolicy: 'all',
+  // Don't pre-gather on localhost as it causes issues
+  ...(isLocalhost ? {} : { iceCandidatePoolSize: 10 }),
   ...(import.meta.env.PUBLIC_WEBRTC_FORCE_RELAY
     ? { iceTransportPolicy: 'relay' as RTCIceTransportPolicy }
     : {}),
 };
+
+console.log('[P2P] RTCConfiguration:', rtcConfig);
+console.log('[P2P] Is localhost:', isLocalhost);
 
 type Mode = 'idle' | 'sending' | 'receiving';
 
@@ -101,6 +113,7 @@ export default function P2PFileShareWebRTC() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [transferSpeed, setTransferSpeed] = useState(0);
+  const [iceHint, setIceHint] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
@@ -116,6 +129,17 @@ export default function P2PFileShareWebRTC() {
   const roomCodeRef = useRef('');
   const roleRef = useRef<'sender' | 'receiver'>('sender');
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const localIceStatsRef = useRef<{
+    count: number;
+    transports: Set<string>;
+    types: Set<string>;
+  }>({
+    count: 0,
+    transports: new Set(),
+    types: new Set(),
+  });
+  const iceDiagnosticsShownRef = useRef(false);
+  const isUnmountedRef = useRef(false);
 
   // Generate unique peer ID
   useEffect(() => {
@@ -124,7 +148,10 @@ export default function P2PFileShareWebRTC() {
 
   // Cleanup on unmount
   useEffect(() => {
+    isUnmountedRef.current = false;
+
     return () => {
+      isUnmountedRef.current = true;
       cleanup();
     };
   }, []);
@@ -155,6 +182,15 @@ export default function P2PFileShareWebRTC() {
     receivedSizeRef.current = 0;
     sendingRef.current = false;
     pendingIceCandidatesRef.current = [];
+    iceDiagnosticsShownRef.current = false;
+    localIceStatsRef.current = {
+      count: 0,
+      transports: new Set(),
+      types: new Set(),
+    };
+    if (!isUnmountedRef.current) {
+      setIceHint(null);
+    }
 
     dlog('cleanup: complete');
   };
@@ -264,11 +300,43 @@ export default function P2PFileShareWebRTC() {
     }
   };
 
+  const reportIceDiagnostics = () => {
+    if (iceDiagnosticsShownRef.current) {
+      return;
+    }
+
+    const stats = localIceStatsRef.current;
+    if (!stats) {
+      return;
+    }
+
+    if (stats.count === 0) {
+      if (!isUnmountedRef.current) {
+        setIceHint('No ICE candidates were generated. This typically means the network is blocking WebRTC traffic.');
+      }
+      iceDiagnosticsShownRef.current = true;
+      return;
+    }
+
+    if (!stats.transports.has('udp')) {
+      if (!isUnmountedRef.current) {
+        setIceHint('Only TCP ICE candidates were generated. UDP appears to be blocked on this network, which usually prevents P2P connections. Try a different network or enable a TURN relay.');
+      }
+      iceDiagnosticsShownRef.current = true;
+    }
+  };
+
   const createPeerConnection = (role: 'sender' | 'receiver') => {
     dlog('Creating peer connection as', role);
     const pc = new RTCPeerConnection(rtcConfig);
     peerConnectionRef.current = pc;
     pendingIceCandidatesRef.current = [];
+    localIceStatsRef.current = {
+      count: 0,
+      transports: new Set(),
+      types: new Set(),
+    };
+    iceDiagnosticsShownRef.current = false;
 
     // Attach handler IMMEDIATELY before anything else
     pc.onicecandidate = (event) => {
@@ -277,6 +345,16 @@ export default function P2PFileShareWebRTC() {
         const cand = event.candidate;
         console.log('[P2P] ICE candidate generated:', cand.candidate);
         console.log('[P2P]   Type:', cand.type, '| Protocol:', cand.protocol, '| Address:', cand.address);
+
+        localIceStatsRef.current.count += 1;
+        const protocol = cand.protocol?.toLowerCase();
+        const type = cand.type?.toLowerCase();
+        if (protocol) {
+          localIceStatsRef.current.transports.add(protocol);
+        }
+        if (type) {
+          localIceStatsRef.current.types.add(type);
+        }
 
         // Send candidate via WebSocket
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -292,6 +370,7 @@ export default function P2PFileShareWebRTC() {
         }
       } else {
         console.log('[P2P] ICE gathering complete (null candidate)');
+        reportIceDiagnostics();
       }
     };
 
@@ -310,6 +389,7 @@ export default function P2PFileShareWebRTC() {
             console.log(`[P2P]   Candidate ${i + 1}:`, line.substring(0, 80) + '...');
           });
         }
+        reportIceDiagnostics();
       }
     };
 
@@ -639,6 +719,7 @@ export default function P2PFileShareWebRTC() {
     setFile(selectedFile);
     setLoading(true);
     setError(null);
+    setIceHint(null);
     setStatus('Creating session...');
 
     try {
@@ -660,6 +741,7 @@ export default function P2PFileShareWebRTC() {
       setCode(sessionCode);
       setMode('sending');
       setStatus('Waiting for receiver...');
+      setIceHint(null);
 
       // Connect to WebSocket (peer connection created inside on 'joined')
       await connectWebSocket(sessionCode, 'sender');
@@ -681,6 +763,7 @@ export default function P2PFileShareWebRTC() {
 
     setLoading(true);
     setError(null);
+    setIceHint(null);
     setStatus('Connecting...');
 
     try {
@@ -694,6 +777,7 @@ export default function P2PFileShareWebRTC() {
       totalSizeRef.current = data.fileSize;
       setMode('receiving');
       setStatus('Establishing connection...');
+      setIceHint(null);
 
       // Connect to WebSocket (peer connection created inside on 'joined')
       await connectWebSocket(codeToUse, 'receiver');
@@ -717,6 +801,7 @@ export default function P2PFileShareWebRTC() {
     setStatus('');
     setError(null);
     setTransferSpeed(0);
+    setIceHint(null);
   };
 
   const copyCodeToClipboard = () => {
@@ -825,6 +910,12 @@ export default function P2PFileShareWebRTC() {
               <Text size="sm" c="dimmed">{status}</Text>
             )}
 
+            {iceHint && (
+              <Alert icon={<IconAlertCircle size={16} />} title="Network Notice" color="orange">
+                <Text size="sm">{iceHint}</Text>
+              </Alert>
+            )}
+
             {progress > 0 && (
               <Box>
                 <Group justify="apart" mb="xs">
@@ -865,6 +956,12 @@ export default function P2PFileShareWebRTC() {
 
             {status && (
               <Text size="sm" c="dimmed">{status}</Text>
+            )}
+
+            {iceHint && (
+              <Alert icon={<IconAlertCircle size={16} />} title="Network Notice" color="orange">
+                <Text size="sm">{iceHint}</Text>
+              </Alert>
             )}
 
             {progress > 0 && (
