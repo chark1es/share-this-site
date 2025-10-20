@@ -120,9 +120,12 @@ export default function CodeInput({
   return (
     <Group gap="xs" justify="center">
       {Array.from({ length }).map((_, index) => (
-        <TextInput
+        <input
           key={index}
           ref={(el) => (inputRefs.current[index] = el)}
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
           value={digits[index] || ''}
           onChange={(e) => handleChange(index, e.target.value)}
           onKeyDown={(e) => handleKeyDown(index, e)}
@@ -130,18 +133,23 @@ export default function CodeInput({
           onFocus={(e) => e.target.select()}
           disabled={disabled}
           maxLength={1}
-          styles={{
-            input: {
-              width: '3rem',
-              height: '3.5rem',
-              textAlign: 'center',
-              fontSize: '1.5rem',
-              fontWeight: 'bold',
-              fontFamily: 'monospace',
-            },
+          style={{
+            width: '3rem',
+            height: '3.5rem',
+            textAlign: 'center',
+            fontSize: '1.5rem',
+            fontWeight: 'bold',
+            fontFamily: 'monospace',
+            border: '2px solid #dee2e6',
+            borderRadius: '0.5rem',
+            outline: 'none',
           }}
-          classNames={{
-            input: 'border-2 border-gray-300 focus:border-blue-500 rounded-lg',
+          onFocus={(e) => {
+            e.target.select();
+            e.target.style.borderColor = '#228be6';
+          }}
+          onBlur={(e) => {
+            e.target.style.borderColor = '#dee2e6';
           }}
         />
       ))}

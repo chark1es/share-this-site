@@ -149,15 +149,15 @@ export default function P2PFileShare() {
       setStatus('Waiting for receiver...');
 
       // Initialize WebRTC peer as initiator
-      // NOTE: We use trickle: false because SimplePeer v9 doesn't properly emit ICE candidates
-      // with trickle: true for data-only connections. With trickle: false, all ICE candidates
-      // are embedded in the offer/answer SDP, which is more reliable.
+      // NOTE: Using trickle: true and manually handling ICE candidates for better reliability
       const peer = new SimplePeer({
         initiator: true,
-        trickle: false,  // Changed from true - see note above
+        trickle: true,  // Enable trickle ICE for immediate offer generation
         config: rtcConfig
       });
       peerRef.current = peer;
+
+      console.log('🔵 SENDER: Peer created, waiting for offer...');
       // ICE state diagnostics
       try {
         (peer as any).on?.('iceStateChange', (s: string) => dlog('sender iceStateChange', s));
@@ -210,17 +210,11 @@ export default function P2PFileShare() {
       peer.on('signal', async (signal) => {
         try {
           const signalType = (signal as any).type;
-          console.log('🔵 SENDER signal event:', signalType);
+          console.log('🔵 SENDER signal event:', signalType, signal);
 
-          // Count ICE candidates in SDP
-          const sdp = (signal as any).sdp || '';
-          const candidateCount = (sdp.match(/a=candidate:/g) || []).length;
-          console.log(`🔵 SENDER SDP contains ${candidateCount} ICE candidates`);
-          dlog('sender signal', signalType, 'SDP length:', JSON.stringify(signal).length, 'candidates:', candidateCount);
-
-          // With trickle: false, we only get one signal event with the complete offer (including ICE candidates)
+          // Send offer immediately when generated
           if (!offerSent && (signal as any).type === 'offer') {
-            console.log('📤 SENDER: Sending offer with embedded ICE candidates');
+            console.log('📤 SENDER: Sending offer');
             dlog('sender sending offer');
             const r = await fetch(`/api/p2p/${data.code}`, {
               method: 'PATCH',
@@ -237,6 +231,22 @@ export default function P2PFileShare() {
               console.error('❌ SENDER: Failed to send offer:', errorData);
             }
             offerSent = true;
+          }
+          // Send ICE candidates as they're generated
+          else if ((signal as any).candidate) {
+            console.log('🧊 SENDER: Sending ICE candidate');
+            try {
+              const r = await fetch(`/api/p2p/${data.code}`, {
+                method: 'PATCH',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  senderIceCandidate: JSON.stringify(signal),
+                }),
+              });
+              dlog('PATCH senderICE status', r.status);
+            } catch (err) {
+              console.error('❌ SENDER: Failed to send ICE candidate:', err);
+            }
           }
         } catch (err) {
           console.error('❌ SENDER: Signal error:', err);
@@ -284,11 +294,11 @@ export default function P2PFileShare() {
 
   const startPollingForAnswer = (sessionCode: string, peer: SimplePeer.Instance) => {
     let answerReceived = false;
-    let lastCandidateCount = 0;
+    let lastReceiverIceCount = 0;
     let tick = 0;
     const MAX_POLL_TICKS = 60; // 60 seconds timeout
 
-    console.log('🔵 SENDER: Starting to poll for answer (with embedded ICE candidates)');
+    console.log('🔵 SENDER: Starting to poll for answer and receiver ICE candidates');
 
     pollingIntervalRef.current = setInterval(async () => {
       tick += 1;
@@ -306,7 +316,6 @@ export default function P2PFileShare() {
 
       try {
         const res = await fetch(`/api/p2p/${sessionCode}`);
-        dlog('poll(answer) tick', tick, 'status', res.status);
         if (!res.ok) {
           clearInterval(pollingIntervalRef.current!);
           pollingIntervalRef.current = null;
@@ -314,30 +323,37 @@ export default function P2PFileShare() {
         }
 
         const data = await res.json();
-        const senderIceCount = (data.senderIceCandidates || []).length;
         const receiverIceCount = (data.receiverIceCandidates || []).length;
 
-        if (tick % 5 === 0 || receiverIceCount > lastCandidateCount) {
-          console.log(`📊 SENDER POLL #${tick}: answer=${!!data.receiverAnswer}, senderICE=${senderIceCount}, receiverICE=${receiverIceCount}, answerApplied=${answerReceived}`);
+        if (tick % 5 === 0) {
+          console.log(`📊 SENDER POLL #${tick}: answer=${!!data.receiverAnswer}, receiverICE=${receiverIceCount}`);
         }
 
-        dlog('poll(answer) state', {
-          hasAnswer: !!data.receiverAnswer,
-          recvIceCount: receiverIceCount,
-        });
-
-        // Handle receiver's answer (only once) - contains embedded ICE candidates
+        // Handle receiver's answer (only once)
         if (data.receiverAnswer && !answerReceived && !peer.destroyed) {
           const answer = JSON.parse(data.receiverAnswer);
-          console.log('✅ SENDER: Received answer with embedded ICE candidates, applying...');
+          console.log('✅ SENDER: Received answer, applying...');
           dlog('sender applying receiverAnswer');
           peer.signal(answer);
           answerReceived = true;
+        }
 
-          // Stop polling once answer is received - connection should establish automatically
-          console.log('🔵 SENDER: Stopping poll, waiting for connection...');
-          clearInterval(pollingIntervalRef.current!);
-          pollingIntervalRef.current = null;
+        // Handle new ICE candidates from receiver
+        if (data.receiverIceCandidates && receiverIceCount > lastReceiverIceCount) {
+          const newCandidates = data.receiverIceCandidates.slice(lastReceiverIceCount);
+          console.log(`🧊 SENDER: Applying ${newCandidates.length} new receiver ICE candidates`);
+
+          for (const candidateStr of newCandidates) {
+            if (!peer.destroyed) {
+              try {
+                const candidate = JSON.parse(candidateStr);
+                peer.signal(candidate);
+              } catch (err) {
+                console.error('❌ SENDER: ICE candidate error:', err);
+              }
+            }
+          }
+          lastReceiverIceCount = receiverIceCount;
         }
       } catch (err) {
         console.error('❌ SENDER: Polling error:', err);
@@ -409,15 +425,14 @@ export default function P2PFileShare() {
       setStatus('Establishing connection...');
 
       // Initialize WebRTC peer as receiver
-      // NOTE: We use trickle: false because SimplePeer v9 doesn't properly emit ICE candidates
-      // with trickle: true for data-only connections. With trickle: false, all ICE candidates
-      // are embedded in the offer/answer SDP, which is more reliable.
       const peer = new SimplePeer({
         initiator: false,
-        trickle: false,  // Changed from true - see note above
+        trickle: true,  // Enable trickle ICE
         config: rtcConfig
       });
       peerRef.current = peer;
+
+      console.log('🟢 RECEIVER: Peer created');
       // ICE state diagnostics
       try {
         (peer as any).on?.('iceStateChange', (s: string) => dlog('receiver iceStateChange', s));
@@ -470,17 +485,11 @@ export default function P2PFileShare() {
       peer.on('signal', async (signal) => {
         try {
           const signalType = (signal as any).type;
-          console.log('🟢 RECEIVER signal event:', signalType);
+          console.log('🟢 RECEIVER signal event:', signalType, signal);
 
-          // Count ICE candidates in SDP
-          const sdp = (signal as any).sdp || '';
-          const candidateCount = (sdp.match(/a=candidate:/g) || []).length;
-          console.log(`🟢 RECEIVER SDP contains ${candidateCount} ICE candidates`);
-          dlog('receiver signal', signalType, 'SDP length:', JSON.stringify(signal).length, 'candidates:', candidateCount);
-
-          // With trickle: false, we only get one signal event with the complete answer (including ICE candidates)
+          // Send answer when generated
           if (!answerSent && (signal as any).type === 'answer') {
-            console.log('📤 RECEIVER: Sending answer with embedded ICE candidates');
+            console.log('📤 RECEIVER: Sending answer');
             dlog('receiver sending answer');
             const r = await fetch(`/api/p2p/${codeToUse}`, {
               method: 'PATCH',
@@ -497,6 +506,22 @@ export default function P2PFileShare() {
               console.error('❌ RECEIVER: Failed to send answer:', errorData);
             }
             answerSent = true;
+          }
+          // Send ICE candidates as they're generated
+          else if ((signal as any).candidate) {
+            console.log('🧊 RECEIVER: Sending ICE candidate');
+            try {
+              const r = await fetch(`/api/p2p/${codeToUse}`, {
+                method: 'PATCH',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  receiverIceCandidate: JSON.stringify(signal),
+                }),
+              });
+              dlog('PATCH receiverICE status', r.status);
+            } catch (err) {
+              console.error('❌ RECEIVER: Failed to send ICE candidate:', err);
+            }
           }
         } catch (err) {
           console.error('❌ RECEIVER: Signal error:', err);
@@ -530,16 +555,32 @@ export default function P2PFileShare() {
         cleanup();
       });
 
-      // Signal with sender's offer (contains embedded ICE candidates with trickle: false)
+      // Signal with sender's offer
       if (data.senderOffer) {
         const offer = JSON.parse(data.senderOffer);
-        console.log('🟢 RECEIVER: Applying offer with embedded ICE candidates');
+        console.log('🟢 RECEIVER: Applying offer');
         dlog('receiver applying offer');
         peer.signal(offer);
-        console.log('🟢 RECEIVER: Offer applied, answer will be generated automatically');
+        console.log('🟢 RECEIVER: Offer applied, answer will be generated');
       } else {
         throw new Error('No offer found in session');
       }
+
+      // Apply any existing sender ICE candidates
+      if (data.senderIceCandidates && data.senderIceCandidates.length > 0) {
+        console.log(`🧊 RECEIVER: Applying ${data.senderIceCandidates.length} existing sender ICE candidates`);
+        for (const candidateStr of data.senderIceCandidates) {
+          try {
+            const candidate = JSON.parse(candidateStr);
+            peer.signal(candidate);
+          } catch (err) {
+            console.error('❌ RECEIVER: Error applying ICE candidate:', err);
+          }
+        }
+      }
+
+      // Start polling for new sender ICE candidates
+      startPollingForSenderCandidates(codeToUse, peer);
 
       notifications.show({
         title: 'Connecting',
@@ -563,6 +604,63 @@ export default function P2PFileShare() {
   };
 
 
+
+  const startPollingForSenderCandidates = (sessionCode: string, peer: SimplePeer.Instance) => {
+    let lastSenderIceCount = 0;
+    let tick = 0;
+    const MAX_POLL_TICKS = 60;
+
+    console.log('🟢 RECEIVER: Starting to poll for sender ICE candidates');
+
+    pollingIntervalRef.current = setInterval(async () => {
+      tick += 1;
+
+      if (tick > MAX_POLL_TICKS) {
+        console.error('❌ RECEIVER TIMEOUT: No connection after 60 seconds');
+        clearInterval(pollingIntervalRef.current!);
+        pollingIntervalRef.current = null;
+        setError('Connection timeout - could not establish P2P connection');
+        cleanup();
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/p2p/${sessionCode}`);
+        if (!res.ok) {
+          clearInterval(pollingIntervalRef.current!);
+          pollingIntervalRef.current = null;
+          return;
+        }
+
+        const data = await res.json();
+        const senderIceCount = (data.senderIceCandidates || []).length;
+
+        if (tick % 5 === 0) {
+          console.log(`📊 RECEIVER POLL #${tick}: senderICE=${senderIceCount}`);
+        }
+
+        // Handle new ICE candidates from sender
+        if (data.senderIceCandidates && senderIceCount > lastSenderIceCount) {
+          const newCandidates = data.senderIceCandidates.slice(lastSenderIceCount);
+          console.log(`🧊 RECEIVER: Applying ${newCandidates.length} new sender ICE candidates`);
+
+          for (const candidateStr of newCandidates) {
+            if (!peer.destroyed) {
+              try {
+                const candidate = JSON.parse(candidateStr);
+                peer.signal(candidate);
+              } catch (err) {
+                console.error('❌ RECEIVER: ICE candidate error:', err);
+              }
+            }
+          }
+          lastSenderIceCount = senderIceCount;
+        }
+      } catch (err) {
+        console.error('❌ RECEIVER: Polling error:', err);
+      }
+    }, 1000);
+  };
 
   const completeFileReceive = () => {
     const blob = new Blob(chunksRef.current);
