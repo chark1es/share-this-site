@@ -32,6 +32,49 @@ const dlog = (...args: any[]) => {
   if (DEBUG_P2P) console.log('[P2P]', ...args);
 };
 
+// simple-peer uses the `debug` package internally. In some browsers (notably Safari with certain
+// localStorage settings) the debug formatter can throw `TypeError: Cannot read properties of
+// undefined (reading 'call')`, which bubbles up as a peer error. We patch the prototype once to
+// swallow that failure and fall back to regular console logging.
+let simplePeerDebugPatched = false;
+const patchSimplePeerDebug = () => {
+  if (simplePeerDebugPatched) return;
+  const proto = (SimplePeer as unknown as { prototype?: Record<string, any> }).prototype as
+    | Record<string, any>
+    | undefined;
+
+  if (!proto || typeof proto._debug !== 'function') {
+    simplePeerDebugPatched = true;
+    return;
+  }
+
+  const originalDebug = proto._debug;
+  let originalErrored = false;
+
+  proto._debug = function patchedDebug(this: any, ...args: any[]) {
+    if (!originalErrored) {
+      try {
+        originalDebug.apply(this, args);
+        return;
+      } catch (err) {
+        originalErrored = true;
+        if (DEBUG_P2P) {
+          console.warn('[P2P] simple-peer debug logger disabled due to error', err);
+        }
+      }
+    }
+
+    if (DEBUG_P2P) {
+      const id = this?._id ?? 'peer';
+      console.debug(`[P2P][simple-peer:${id}]`, ...args);
+    }
+  };
+
+  simplePeerDebugPatched = true;
+};
+
+patchSimplePeerDebug();
+
 // WebRTC ICE configuration (STUN + optional TURN via env)
 const rtcConfig: RTCConfiguration = {
   iceServers: [
@@ -883,4 +926,3 @@ export default function P2PFileShare() {
     </Stack>
   );
 }
-
