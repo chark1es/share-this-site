@@ -35,7 +35,12 @@ const dlog = (...args: any[]) => {
 // WebRTC ICE configuration (STUN + optional TURN via env)
 const rtcConfig: RTCConfiguration = {
   iceServers: [
+    // Multiple Google STUN servers for better reliability and fallback
     { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
     ...(import.meta.env.PUBLIC_TURN_URL
       ? [{
         urls: import.meta.env.PUBLIC_TURN_URL as string,
@@ -44,7 +49,7 @@ const rtcConfig: RTCConfiguration = {
       }]
       : []),
   ],
-  iceCandidatePoolSize: 2,
+  iceCandidatePoolSize: 10, // Increased from 2 to generate more candidates
   ...(import.meta.env.PUBLIC_WEBRTC_FORCE_RELAY ? { iceTransportPolicy: 'relay' as any } : {}),
 };
 
