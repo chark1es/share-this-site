@@ -63,8 +63,7 @@ const rtcConfig: RTCConfiguration = {
   bundlePolicy: 'max-bundle',
   rtcpMuxPolicy: 'require',
   iceTransportPolicy: 'all',
-  // Don't pre-gather on localhost as it causes issues
-  ...(isLocalhost ? {} : { iceCandidatePoolSize: 10 }),
+  iceCandidatePoolSize: 1, // Reduce from 10 to avoid flakiness
   ...(import.meta.env.PUBLIC_WEBRTC_FORCE_RELAY
     ? { iceTransportPolicy: 'relay' as RTCIceTransportPolicy }
     : {}),
@@ -94,7 +93,7 @@ interface FileChunk {
 type FileMessage = FileMetadata | FileChunk;
 
 interface SignalingMessage {
-  type: 'join' | 'joined' | 'offer' | 'answer' | 'ice-candidate' | 'peer-joined' | 'peer-left' | 'error';
+  type: 'join' | 'joined' | 'offer' | 'answer' | 'ice-candidate' | 'candidate-end' | 'peer-joined' | 'peer-left' | 'error';
   roomCode?: string;
   role?: 'sender' | 'receiver';
   peerId?: string;
@@ -249,6 +248,15 @@ export default function P2PFileShareWebRTC() {
                 await handleIceCandidate(message.candidate);
               }
               break;
+            case 'candidate-end':
+              // Fix 2: Handle end-of-candidates signal
+              console.log('[P2P] remote end-of-candidates');
+              try {
+                await peerConnectionRef.current?.addIceCandidate(null as any);
+              } catch (err) {
+                // Ignore errors from addIceCandidate(null)
+              }
+              break;
             case 'peer-left':
               setError('Peer disconnected');
               cleanup();
@@ -290,8 +298,15 @@ export default function P2PFileShareWebRTC() {
     dlog('Flushing queued ICE candidates:', queuedCandidates.length);
 
     for (const candidate of queuedCandidates) {
+      // Filter UDP candidates when flushing
+      const raw = candidate.candidate || '';
+      if (raw && !/ udp /i.test(raw)) {
+        console.log(`[P2P][${roleRef.current}] ignore queued non-UDP candidate:`, raw);
+        continue;
+      }
+
       try {
-        dlog('Adding queued ICE candidate:', candidate.candidate?.substring(0, 50) + '...');
+        console.log(`[P2P][${roleRef.current}] adding queued candidate:`, candidate.candidate?.substring(0, 50) + '...');
         await pc.addIceCandidate(new RTCIceCandidate(candidate));
         dlog('Successfully added queued ICE candidate');
       } catch (error) {
@@ -343,8 +358,15 @@ export default function P2PFileShareWebRTC() {
       console.log('[P2P] onicecandidate event fired!', event.candidate ? 'Has candidate' : 'Null candidate');
       if (event.candidate) {
         const cand = event.candidate;
-        console.log('[P2P] ICE candidate generated:', cand.candidate);
+        const candLine = cand.candidate; // raw SDP line
+        console.log('[P2P] ICE candidate generated:', candLine);
         console.log('[P2P]   Type:', cand.type, '| Protocol:', cand.protocol, '| Address:', cand.address);
+
+        // Fix 1: Filter out non-UDP candidates
+        if (!/ udp /i.test(candLine)) {
+          console.log(`[P2P][${role}] drop non-UDP candidate:`, candLine);
+          return; // ignore TCP (and other) transport lines
+        }
 
         localIceStatsRef.current.count += 1;
         const protocol = cand.protocol?.toLowerCase();
@@ -358,7 +380,7 @@ export default function P2PFileShareWebRTC() {
 
         // Send candidate via WebSocket
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          console.log('[P2P] Sending ICE candidate via WebSocket');
+          console.log(`[P2P][${role}] sending UDP candidate`);
           wsRef.current.send(JSON.stringify({
             type: 'ice-candidate',
             roomCode: roomCodeRef.current,
@@ -369,7 +391,15 @@ export default function P2PFileShareWebRTC() {
           console.warn('[P2P] WebSocket not ready, cannot send ICE candidate');
         }
       } else {
+        // Fix 2: Send explicit end-of-candidates signal
         console.log('[P2P] ICE gathering complete (null candidate)');
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({
+            type: 'candidate-end',
+            roomCode: roomCodeRef.current,
+            role: roleRef.current
+          }));
+        }
         reportIceDiagnostics();
       }
     };
@@ -532,6 +562,13 @@ export default function P2PFileShareWebRTC() {
       return;
     }
 
+    // Fix 1: Filter remote non-UDP candidates
+    const raw = candidate.candidate || '';
+    if (raw && !/ udp /i.test(raw)) {
+      console.log(`[P2P][${roleRef.current}] ignore remote non-UDP candidate:`, raw);
+      return;
+    }
+
     if (!pc.remoteDescription) {
       dlog('Queueing ICE candidate until remote description is set');
       pendingIceCandidatesRef.current.push(candidate);
@@ -539,7 +576,7 @@ export default function P2PFileShareWebRTC() {
     }
 
     try {
-      dlog('Adding ICE candidate:', candidate.candidate?.substring(0, 50) + '...');
+      console.log(`[P2P][${roleRef.current}] adding candidate:`, candidate.candidate?.substring(0, 50) + '...');
       await pc.addIceCandidate(new RTCIceCandidate(candidate));
       dlog('Successfully added ICE candidate');
     } catch (error) {
