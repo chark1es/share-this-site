@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { Tabs, Container, Box } from '@mantine/core';
-import { IconLink, IconFileUpload, IconCode } from '@tabler/icons-react';
+import { IconLink, IconCode } from '@tabler/icons-react';
 import LinkCreator from './LinkCreator';
-import P2PFileShareWebRTC from './P2PFileShareWebRTC';
 import SnippetShare from './SnippetShare';
 
 export default function TabsContainer() {
@@ -29,13 +28,6 @@ export default function TabsContainer() {
             URL Shortener
           </Tabs.Tab>
           <Tabs.Tab
-            value="files"
-            leftSection={<IconFileUpload size={18} />}
-            className="font-medium transition-all duration-200 data-[active]:bg-white data-[active]:shadow-sm"
-          >
-            P2P File Share
-          </Tabs.Tab>
-          <Tabs.Tab
             value="snippets"
             leftSection={<IconCode size={18} />}
             className="font-medium transition-all duration-200 data-[active]:bg-white data-[active]:shadow-sm"
@@ -47,12 +39,6 @@ export default function TabsContainer() {
         <Tabs.Panel value="links">
           <Box className="animate-fade-in">
             <LinkCreator />
-          </Box>
-        </Tabs.Panel>
-
-        <Tabs.Panel value="files">
-          <Box className="animate-fade-in">
-            <P2PFileShareWebRTC />
           </Box>
         </Tabs.Panel>
 
