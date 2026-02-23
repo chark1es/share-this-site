@@ -1,7 +1,7 @@
 import type { APIContext } from "astro";
 export const prerender = false;
 
-import { db, FieldValue, Timestamp } from "../../lib/server/firebase-admin";
+import { convex } from "../../lib/server/convex";
 import { pickWord } from "../../lib/words";
 
 function normalizeUrl(input: string): string {
@@ -28,25 +28,22 @@ export async function POST(ctx: APIContext): Promise<Response> {
         );
         const targetUrl = normalizeUrl(String(body?.url || ""));
 
-        const expireAt = Timestamp.fromDate(
-            new Date(Date.now() + ttl * 60 * 1000)
-        );
+        const now = Date.now();
+        const expireAt = now + ttl * 60 * 1000;
 
         let key = "";
         let attempts = 0;
         while (attempts++ < 50) {
             key = await pickWord();
-            const ref = db.collection("links").doc(key);
-            const snap = await ref.get();
 
-            // If document doesn't exist, we can use this key
-            if (!snap.exists) {
-                await ref.set({
+            const existing = await convex.query("links:getLink", { key });
+
+            if (!existing) {
+                await convex.mutation("links:createLink", {
+                    key,
                     url: targetUrl,
-                    createdAt: FieldValue.serverTimestamp(),
+                    createdAt: now,
                     expireAt,
-                    visits: 0,
-                    active: true,
                 });
                 const origin = (
                     (import.meta as any).env?.SITE_URL ??
@@ -58,7 +55,7 @@ export async function POST(ctx: APIContext): Promise<Response> {
                         key,
                         url: targetUrl,
                         shortUrl: `${origin}/${key}`,
-                        expireAt: expireAt.toDate().toISOString(),
+                        expireAt: new Date(expireAt).toISOString(),
                     }),
                     {
                         status: 201,
@@ -67,20 +64,15 @@ export async function POST(ctx: APIContext): Promise<Response> {
                 );
             }
 
-            // If document exists, check if it's expired or inactive
-            const data = snap.data() as any;
-            const isExpired =
-                !data?.expireAt || data.expireAt.toMillis() <= Date.now();
-            const isInactive = data?.active === false;
+            const isExpired = !existing?.expireAt || existing.expireAt <= Date.now();
+            const isInactive = existing?.active === false;
 
             if (isExpired || isInactive) {
-                // Link is expired or inactive, we can replace it
-                await ref.set({
+                await convex.mutation("links:updateLink", {
+                    key,
                     url: targetUrl,
-                    createdAt: FieldValue.serverTimestamp(),
+                    createdAt: now,
                     expireAt,
-                    visits: 0,
-                    active: true,
                 });
                 const origin = (
                     (import.meta as any).env?.SITE_URL ??
@@ -92,7 +84,7 @@ export async function POST(ctx: APIContext): Promise<Response> {
                         key,
                         url: targetUrl,
                         shortUrl: `${origin}/${key}`,
-                        expireAt: expireAt.toDate().toISOString(),
+                        expireAt: new Date(expireAt).toISOString(),
                     }),
                     {
                         status: 201,
@@ -100,8 +92,6 @@ export async function POST(ctx: APIContext): Promise<Response> {
                     }
                 );
             }
-
-            // Link exists and is still active, try another word
         }
 
         return new Response(

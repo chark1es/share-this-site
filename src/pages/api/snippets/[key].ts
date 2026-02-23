@@ -1,45 +1,41 @@
 import type { APIContext } from "astro";
 export const prerender = false;
 
-import { db, FieldValue } from "../../../lib/server/firebase-admin";
+import { convex } from "../../../lib/server/convex";
 
 export async function GET({ params }: APIContext): Promise<Response> {
     try {
         const key = params.key as string;
-        const ref = db.collection("snippets").doc(key);
-        const snap = await ref.get();
+        const snippet = await convex.query("snippets:getSnippet", { key });
 
-        if (!snap.exists) {
+        if (!snippet) {
             return new Response(
                 JSON.stringify({ error: "Snippet not found" }),
                 { status: 404, headers: { "content-type": "application/json" } }
             );
         }
 
-        const data = snap.data() as any;
-        const expired = !data?.expireAt || data.expireAt.toMillis() <= Date.now();
+        const expired = !snippet?.expireAt || snippet.expireAt <= Date.now();
 
-        if (expired || data?.active === false) {
-            // Clean up expired snippet
-            ref.delete().catch(() => {});
+        if (expired || snippet?.active === false) {
+            convex.mutation("snippets:deleteSnippet", { key }).catch(() => {});
             return new Response(
                 JSON.stringify({ error: "Snippet expired" }),
                 { status: 410, headers: { "content-type": "application/json" } }
             );
         }
 
-        // Increment views asynchronously
-        ref.update({ views: FieldValue.increment(1) }).catch(() => {});
+        convex.mutation("snippets:incrementViews", { key }).catch(() => {});
 
         return new Response(
             JSON.stringify({
                 key,
-                content: data.content,
-                language: data.language,
-                title: data.title,
-                createdAt: data.createdAt?.toDate().toISOString(),
-                expireAt: data.expireAt?.toDate().toISOString(),
-                views: data.views,
+                content: snippet.content,
+                language: snippet.language,
+                title: snippet.title,
+                createdAt: new Date(snippet.createdAt).toISOString(),
+                expireAt: new Date(snippet.expireAt).toISOString(),
+                views: snippet.views,
             }),
             { status: 200, headers: { "content-type": "application/json" } }
         );

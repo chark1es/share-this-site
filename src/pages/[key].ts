@@ -1,49 +1,39 @@
 import type { APIContext } from "astro";
 export const prerender = false;
 
-import { db, FieldValue } from "../lib/server/firebase-admin";
+import { convex } from "../lib/server/convex";
 
 export async function GET({ params, url }: APIContext): Promise<Response> {
     const key = params.key as string;
-    const ref = db.collection("links").doc(key);
-    const snap = await ref.get();
+    const link = await convex.query("links:getLink", { key });
 
-    if (!snap.exists) {
-        // Redirect to home with expired link notification
+    if (!link) {
         const origin = url.origin;
         return new Response(null, {
             status: 302,
             headers: {
-                Location: `${origin}/?expired=true&key=${encodeURIComponent(
-                    key
-                )}`,
+                Location: `${origin}/?expired=true&key=${encodeURIComponent(key)}`,
             },
         });
     }
 
-    const data = snap.data() as any;
-    const expired = !data?.expireAt || data.expireAt.toMillis() <= Date.now();
+    const expired = !link?.expireAt || link.expireAt <= Date.now();
 
-    if (expired || data?.active === false) {
-        // Optional GC: remove expired/inactive link
-        ref.delete().catch(() => {});
-        // Redirect to home with expired link notification
+    if (expired || link?.active === false) {
+        convex.mutation("links:deleteLink", { key }).catch(() => {});
         const origin = url.origin;
         return new Response(null, {
             status: 302,
             headers: {
-                Location: `${origin}/?expired=true&key=${encodeURIComponent(
-                    key
-                )}`,
+                Location: `${origin}/?expired=true&key=${encodeURIComponent(key)}`,
             },
         });
     }
 
-    // Increment visits asynchronously
-    ref.update({ visits: FieldValue.increment(1) }).catch(() => {});
+    convex.mutation("links:incrementVisits", { key }).catch(() => {});
 
     return new Response(null, {
         status: 302,
-        headers: { Location: String(data.url) },
+        headers: { Location: String(link.url) },
     });
 }

@@ -1,7 +1,7 @@
 import type { APIContext } from "astro";
 export const prerender = false;
 
-import { db, FieldValue, Timestamp } from "../../../lib/server/firebase-admin";
+import { convex } from "../../../lib/server/convex";
 import { pickWord } from "../../../lib/words";
 
 export async function POST(ctx: APIContext): Promise<Response> {
@@ -19,28 +19,26 @@ export async function POST(ctx: APIContext): Promise<Response> {
         const ttl = Math.max(
             1,
             Math.min(10080, isFinite(ttlMinutes) ? ttlMinutes : 1440)
-        ); // Default 24 hours
-
-        const expireAt = Timestamp.fromDate(
-            new Date(Date.now() + ttl * 60 * 1000)
         );
+
+        const now = Date.now();
+        const expireAt = now + ttl * 60 * 1000;
 
         let key = "";
         let attempts = 0;
         while (attempts++ < 50) {
             key = await pickWord();
-            const ref = db.collection("snippets").doc(key);
-            const snap = await ref.get();
 
-            if (!snap.exists) {
-                await ref.set({
+            const existing = await convex.query("snippets:getSnippet", { key });
+
+            if (!existing) {
+                await convex.mutation("snippets:createSnippet", {
+                    key,
                     content: content.trim(),
                     language: language || "plaintext",
                     title: title || "Untitled",
-                    createdAt: FieldValue.serverTimestamp(),
+                    createdAt: now,
                     expireAt,
-                    views: 0,
-                    active: true,
                 });
 
                 const origin = (
@@ -53,7 +51,7 @@ export async function POST(ctx: APIContext): Promise<Response> {
                     JSON.stringify({
                         key,
                         url: `${origin}/snippet/${key}`,
-                        expireAt: expireAt.toDate().toISOString(),
+                        expireAt: new Date(expireAt).toISOString(),
                     }),
                     {
                         status: 201,
@@ -62,20 +60,16 @@ export async function POST(ctx: APIContext): Promise<Response> {
                 );
             }
 
-            // Check if existing snippet is expired
-            const data = snap.data() as any;
-            const isExpired =
-                !data?.expireAt || data.expireAt.toMillis() <= Date.now();
+            const isExpired = !existing?.expireAt || existing.expireAt <= Date.now();
 
-            if (isExpired || data?.active === false) {
-                await ref.set({
+            if (isExpired || existing?.active === false) {
+                await convex.mutation("snippets:updateSnippet", {
+                    key,
                     content: content.trim(),
                     language: language || "plaintext",
                     title: title || "Untitled",
-                    createdAt: FieldValue.serverTimestamp(),
+                    createdAt: now,
                     expireAt,
-                    views: 0,
-                    active: true,
                 });
 
                 const origin = (
@@ -88,7 +82,7 @@ export async function POST(ctx: APIContext): Promise<Response> {
                     JSON.stringify({
                         key,
                         url: `${origin}/snippet/${key}`,
-                        expireAt: expireAt.toDate().toISOString(),
+                        expireAt: new Date(expireAt).toISOString(),
                     }),
                     {
                         status: 201,
