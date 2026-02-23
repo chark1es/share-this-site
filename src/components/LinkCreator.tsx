@@ -92,11 +92,14 @@ export default function LinkCreator() {
       return `https://${trimmed}`;
     })();
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     try {
       const res = await fetch('/api/links', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ url: normalizedUrl, ttlMinutes: finalTtl }),
+        signal: controller.signal,
       });
       const data = await res.json();
 
@@ -115,7 +118,10 @@ export default function LinkCreator() {
         icon: <IconCheck size={16} />,
       });
     } catch (err: any) {
-      const errorMessage = err?.message || 'Something went wrong';
+      const isAbort = err?.name === 'AbortError';
+      const errorMessage = isAbort
+        ? 'Request timed out. Please try again.'
+        : err?.message || 'Something went wrong';
       setError(errorMessage);
       notifications.show({
         title: 'Error',
@@ -124,6 +130,7 @@ export default function LinkCreator() {
         icon: <IconAlertCircle size={16} />,
       });
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
   }
@@ -392,4 +399,3 @@ export default function LinkCreator() {
     </div>
   );
 }
-

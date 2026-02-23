@@ -89,6 +89,8 @@ export default function SnippetShare() {
     setLoading(true);
     setError(null);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     try {
       const res = await fetch('/api/snippets/create', {
         method: 'POST',
@@ -99,6 +101,7 @@ export default function SnippetShare() {
           title: title.trim() || 'Untitled',
           ttlMinutes: Number(ttl),
         }),
+        signal: controller.signal,
       });
 
       const data = await res.json();
@@ -129,14 +132,19 @@ export default function SnippetShare() {
         icon: <IconCheck size={16} />,
       });
     } catch (err: any) {
-      setError(err?.message || 'Failed to create snippet');
+      const isAbort = err?.name === 'AbortError';
+      const message = isAbort
+        ? 'Request timed out. Please try again.'
+        : err?.message || 'Failed to create snippet';
+      setError(message);
       notifications.show({
         title: 'Error',
-        message: err?.message || 'Failed to create snippet',
+        message,
         color: 'red',
         icon: <IconAlertCircle size={16} />,
       });
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
   };
@@ -386,4 +394,3 @@ export default function SnippetShare() {
     </Stack>
   );
 }
-
