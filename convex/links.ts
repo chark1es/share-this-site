@@ -75,3 +75,23 @@ export const deleteLink = mutation({
     }
   },
 });
+
+export const purgeExpiredLinks = mutation({
+  handler: async (ctx) => {
+    const now = Date.now();
+    const links = await ctx.db.query("links").collect();
+
+    let deleted = 0;
+    for (const link of links) {
+      const isExpired = !link.expireAt || link.expireAt <= now;
+      const isInactive = link.active === false;
+
+      if (isExpired || isInactive) {
+        await ctx.db.delete(link._id);
+        deleted += 1;
+      }
+    }
+
+    return { deleted };
+  },
+});

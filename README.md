@@ -59,3 +59,4 @@ bun run start
 -   Generated links are of the form: https://your-domain/{key}
 -   API response includes shortUrl you can display or copy.
 -   Minimal logic on purpose; easy to read and modify.
+-   A Convex cron job (`convex/crons.ts`) runs daily at 08:00 UTC to delete expired or inactive links automatically.
