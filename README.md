@@ -60,3 +60,12 @@ bun run start
 -   API response includes shortUrl you can display or copy.
 -   Minimal logic on purpose; easy to read and modify.
 -   A Convex cron job (`convex/crons.ts`) runs daily at 08:00 UTC to delete expired or inactive links automatically.
+
+## Deploying on Dokploy via Railpack
+
+1. Push this repo to a Git host (GitHub/GitLab/etc.).
+2. In Dokploy, create a project + application that points to your repo/branch and choose **Railpack** as the builder.
+3. The repo ships with `railpack.json`, which pins Node 22 + Bun, runs `bun install --frozen-lockfile && bun run build`, prunes dev dependencies via `bun prune --production`, and publishes the `dist/` output plus production `node_modules`.
+4. Dokploy will start the server with `bun run start`, which runs the standalone Astro adapter server (listening on `PORT`, default 8080).
+5. Set required environment variables in Dokploy (e.g., `SITE_URL`, Convex + Firebase secrets, `CONVEX_URL`, `CONVEX_DEPLOYMENT`).
+6. Enable auto-deploy if you want Dokploy to redeploy whenever `main` changes.
